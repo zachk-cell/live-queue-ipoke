@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Past streams — Poke Pig Live Queue</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--panel2:#1d212b;--line:#272c38;--text:#e8ebf2;
+    --muted:#8b93a7;--accent:#4f8cff;--done:#25c26e;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+  header{position:sticky;top:0;background:linear-gradient(180deg,#141824,#0f1115);
+    border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;gap:14px}
+  header h1{font-size:17px;margin:0}
+  a.back{color:var(--accent);text-decoration:none;font-size:13px;font-weight:600}
+  main{max-width:760px;margin:0 auto;padding:20px 16px 80px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .row{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:14px 16px;margin-bottom:10px}
+  .row .when{font-weight:700;font-size:15px}
+  .row .meta{color:var(--muted);font-size:13px;margin-top:2px}
+  .row .spacer{margin-left:auto}
+  button{cursor:pointer;border:none;border-radius:9px;font-size:13px;font-weight:600;padding:9px 14px;
+    background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+  button:hover{filter:brightness(1.15)}
+  .dl{background:var(--done);border-color:var(--done);color:#04180d}
+  .empty{color:var(--muted);text-align:center;padding:48px 20px;border:1px dashed var(--line);border-radius:12px}
+  .num{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="{{ADMIN}}">← Back to queue</a>
+  <h1>🗂 Past streams</h1>
+</header>
+<main>
+  <p class="sub">The last few streams you've run. Each row is one stream — download its full fulfilled-orders list as a spreadsheet.</p>
+  <div id="list"><div class="empty">Loading…</div></div>
+</main>
+<script>
+  function money(n){return '$'+Number(n||0).toFixed(2);}
+  function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+  async function load(){
+    const el = document.getElementById('list');
+    try {
+      const res = await fetch('/api/history');
+      if(!res.ok){ location.href='{{ADMIN}}'; return; }
+      const { history } = await res.json();
+      if(!history || !history.length){
+        el.innerHTML = '<div class="empty">No past streams yet.<br><br>Each time you hit <b>Go Live</b> to start a new stream, the previous one is archived here.</div>';
+        return;
+      }
+      el.innerHTML = history.map(s=>{
+        const label = new Date(s.endedAt).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+        return `<div class="row">
+          <div>
+            <div class="when">Stream ending ${esc(label)}</div>
+            <div class="meta num">${s.count} order${s.count===1?'':'s'} fulfilled · ${money(s.value)} total</div>
+          </div>
+          <div class="spacer"></div>
+          <a href="/api/export/${encodeURIComponent(s.id)}" style="text-decoration:none"><button class="dl">⬇ Export CSV</button></a>
+        </div>`;
+      }).join('');
+    } catch(e){
+      el.innerHTML = '<div class="empty">Could not load history. Try refreshing.</div>';
+    }
+  }
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live Queue — Interactive Sandbox</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --line:#272c38;
+    --text:#e8ebf2; --muted:#8b93a7; --accent:#4f8cff; --accent2:#2b6bff;
+    --pri:#ffb020; --pri-bg:#3a2c0c; --done:#25c26e; --danger:#ff5d5d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+  header{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#141824,#0f1115);
+    border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0;letter-spacing:.3px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--danger);display:inline-block;margin-right:6px;box-shadow:0 0 8px rgba(255,93,93,.55)}
+  .dot.live{background:var(--done);box-shadow:0 0 8px var(--done)}
+  .stats{display:flex;gap:18px;flex-wrap:wrap}
+  .hdr-link{display:inline-flex;align-items:center;text-decoration:none;background:transparent;color:var(--text);
+    border:1px solid var(--line);border-radius:9px;font-size:13px;font-weight:600;padding:8px 12px;transition:.12s;white-space:nowrap}
+  .hdr-link:hover{filter:brightness(1.15);border-color:var(--accent)}
+  .hdr-logout{margin-left:auto}
+  .stat{text-align:center;min-width:64px}
+  .stat b{display:block;font-size:20px;line-height:1.1}
+  .stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  main{max-width:920px;margin:0 auto;padding:18px 16px 90px}
+  .demobar{background:linear-gradient(180deg,#122033,#141a21);border:1px solid #24405f;border-radius:14px;padding:14px 16px;margin:6px 0 16px}
+  .demobar h2{margin:0 0 4px;font-size:15px}
+  .demobar p{margin:0 0 11px;color:var(--muted);font-size:13px}
+  .demobar .btns{display:flex;gap:8px;flex-wrap:wrap}
+  .demobar button{cursor:pointer;border:1px solid var(--line);border-radius:9px;font-size:12.5px;font-weight:600;
+    padding:8px 12px;background:var(--panel2);color:var(--text);transition:.12s}
+  .demobar button:hover{filter:brightness(1.2);border-color:var(--accent)}
+  .demobar button.key{background:var(--accent2);border-color:var(--accent2)}
+  .demobar button.clr{border-color:#5a2a2a;color:#ffb3b3}
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:nowrap}
+  .toolbar input{flex:1;min-width:140px;background:var(--panel2);border:1px solid var(--line);
+    color:var(--text);padding:9px 12px;border-radius:9px;font-size:13px}
+  button{cursor:pointer;border:none;border-radius:9px;font-size:13px;font-weight:600;padding:9px 14px;
+    background:var(--panel2);color:var(--text);border:1px solid var(--line);transition:.12s}
+  button:hover{filter:brightness(1.15)}
+  button.primary{background:var(--accent2);border-color:var(--accent2)}
+  button.ghost{background:transparent}
+  .sectitle{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:22px 4px 10px}
+  .sectitle.collapser{cursor:pointer;user-select:none}
+  .sectitle .cav{display:inline-block;transition:transform .12s;font-size:9px;color:var(--muted)}
+  .sectitle.collapsed .cav{transform:rotate(-90deg)}
+  .secount{color:var(--muted);font-weight:700;letter-spacing:0}
+  .slot{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:9px}
+  .slotmain{display:flex;align-items:center;gap:12px;padding:12px 14px}
+  .slot.new{animation:pop .18s ease}
+  .slot.priority{border-color:var(--pri);background:linear-gradient(90deg,var(--pri-bg),var(--panel))}
+  .slot.bumped{outline:2px solid var(--accent)}
+  .slot.reorder{border-color:var(--done);box-shadow:0 0 0 1px var(--done) inset}
+  @keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .caret{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;
+    padding:6px 9px;font-size:12px;line-height:1;flex:none;transition:transform .12s,color .12s,border-color .12s}
+  .caret:hover{color:var(--text);border-color:var(--accent)}
+  .slot.expanded .caret{transform:rotate(90deg);color:var(--accent);border-color:var(--accent)}
+  .details{display:none;border-top:1px dashed var(--line);padding:10px 16px 12px 50px}
+  .slot.expanded .details{display:block}
+  .details .di{display:flex;gap:10px;padding:4px 0;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
+  .details .di:last-of-type{border-bottom:none}
+  .details .diq{color:var(--muted);font-variant-numeric:tabular-nums;min-width:34px;font-weight:700}
+  .details .dgh{color:var(--muted);font-variant-numeric:tabular-nums;font-size:11px;font-weight:700;margin:7px 0 1px}
+  .details .dgh:first-child{margin-top:0}
+  .details .dsub{margin:9px 0 2px;font-size:11px;font-weight:800;letter-spacing:.4px;color:var(--done);text-transform:uppercase}
+  .details .dord{color:var(--muted);font-size:11.5px;margin-top:9px;border-top:1px solid rgba(255,255,255,.06);padding-top:7px}
+  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:18px;width:34px;text-align:center;color:var(--muted)}
+  .slot.priority .pos{color:var(--pri)}
+  .who{flex:1;min-width:0}
+  .who .name{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;white-space:nowrap}
+  .who .name .ordno{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:0}
+  .badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.4px;white-space:nowrap;flex:none}
+  .badge.pri{background:var(--pri);color:#2a1e00}
+  .badge.multi{background:#31384a;color:#cdd4e4}
+  .badge.back{background:#12303a;color:#7fdce8}
+  .badge.reorder{background:var(--done);color:#04180d;animation:pulse 1.3s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .badge.samename{background:#4a2c00;color:#ffcf87;border:1px solid var(--pri)}
+  .badge.hold{background:var(--danger);color:#fff;animation:pulse 1.3s ease-in-out infinite}
+  .slot.onhold{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger) inset}
+  .idtag{color:var(--muted);font-size:11px;font-weight:600;flex:none}
+  .who .items{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .money{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;margin-right:4px;white-space:nowrap}
+  .actions{display:flex;gap:8px;align-items:center}
+  .actions button{padding:8px 11px}
+  .fulfill{background:var(--done);border-color:var(--done);color:#04180d;margin-left:16px}
+  .bumpb{background:transparent;color:var(--accent)}
+  .labelb{background:transparent;color:#cdd4e4}
+  .removeb{background:transparent;color:var(--muted);border:1px solid transparent;padding:6px 9px;font-size:14px;line-height:1;flex:none}
+  .removeb:hover{color:var(--danger);border-color:var(--danger)}
+  button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+  .empty{color:var(--muted);text-align:center;padding:40px;border:1px dashed var(--line);border-radius:12px}
+  .done-row{display:flex;gap:12px;align-items:center;padding:8px 12px;color:var(--muted);font-size:13px;border-bottom:1px solid var(--line)}
+  .done-row .name{color:var(--text)}
+  .cancel-row{border-left:2px solid var(--danger)}
+  .cancel-row .name{text-decoration:line-through;color:var(--muted)}
+  .undob{background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:600;padding:5px 10px;cursor:pointer;white-space:nowrap}
+  .undob:hover{color:var(--text);border-color:var(--accent)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:20}
+  .modal.open{display:flex}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:min(520px,92vw)}
+  .card h3{margin:0 0 6px}
+  .card p{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .card textarea{width:100%;height:110px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px;font-size:13px;font-family:inherit;resize:vertical}
+  .row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{background:var(--pri-bg);color:var(--pri);border:1px solid var(--pri);border-radius:20px;padding:3px 10px;font-size:12px}
+  .livebadge{font-size:10px;font-weight:800;letter-spacing:.6px;padding:3px 8px;border-radius:20px;background:#3a2020;color:#ff8b8b;vertical-align:middle;margin-left:6px}
+  .livebadge.on{background:#12331f;color:#43e08a;box-shadow:0 0 8px rgba(67,224,138,.4)}
+  .demopill{font-size:10px;font-weight:800;letter-spacing:.4px;padding:3px 8px;border-radius:20px;background:#24405f;color:#8fc3ff;vertical-align:middle;margin-left:4px}
+  button.livebtn{background:var(--done);border-color:var(--done);color:#04180d;font-weight:800}
+  button.livebtn.off{background:#c23b3b;border-color:#c23b3b;color:#fff}
+  .offline-banner{background:#2a1a1a;border:1px solid #5a2a2a;color:#ffb3b3;border-radius:11px;padding:11px 14px;margin:6px 0 14px;font-size:13px}
+  .ordno{color:#748099;font-variant-numeric:tabular-nums;font-size:11.5px;margin-right:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="dot" class="dot"></span>Poke Pig Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span class="demopill">🧪 SANDBOX</span></h1>
+  <a href="/guide" class="hdr-link hdr-logout">← Back to guide</a>
+  <div class="stats">
+    <div class="stat"><b id="s-active">0</b><span>In queue</span></div>
+    <div class="stat"><b id="s-pri">0</b><span>Priority</span></div>
+    <div class="stat"><b id="s-val">$0</b><span>Queue value</span></div>
+    <div class="stat"><b id="s-done">0</b><span>Fulfilled</span></div>
+  </div>
+</header>
+
+<main>
+  <div class="demobar">
+    <h2>🧪 Interactive sandbox — nothing here is real</h2>
+    <p>This is a safe copy of the admin panel with make-believe orders. Add orders with the buttons below, then click around: expand rows, print labels, fulfill, bump, undo — you can't break anything. Refresh the page to start over.</p>
+    <div class="btns">
+      <button class="key" onclick="loadSample()">▶ Load a sample board</button>
+      <button onclick="addNormal()">＋ Add order</button>
+      <button onclick="addPriority()">⭐ Add priority (mystery bag)</button>
+      <button onclick="addRepeatTop()">🔁 Add repeat for #1</button>
+      <button onclick="addQtyOrder()">×5 Add a 5-quantity bundle order</button>
+      <button onclick="addSameName()">👥 Add same-name buyer</button>
+      <button onclick="addHold()">⚠ Add cancel-request</button>
+      <button class="clr" onclick="clearAll()">Clear the board</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button id="liveBtn" class="livebtn" onclick="toggleLive()">● Go Live</button>
+    <input id="search" placeholder="Filter by buyer…" oninput="render()" />
+    <button class="ghost" onclick="openPriority()">⭐ Priority items</button>
+    <button class="ghost" onclick="resetQueue()">Reset</button>
+    <button class="ghost" onclick="alert('In the real panel this opens Past streams. Disabled in the sandbox.')">🗂 Past streams ↗</button>
+  </div>
+
+  <div class="chips" id="pri-chips"></div>
+
+  <div id="offline-banner" class="offline-banner" style="display:none">
+    ⚫ You're <b>offline</b> — in the real panel, new orders are ignored until you hit <b>Go Live</b>. (In the sandbox you can add orders anytime.)
+  </div>
+
+  <div class="sectitle">Active queue — top is next</div>
+  <div id="queue"></div>
+
+  <div class="sectitle collapser" id="fhead" onclick="toggleSection('fulfilled')" style="display:flex;align-items:center;gap:8px">
+    <span class="cav">▾</span><span>Fulfilled this stream</span><span class="secount" id="f-count"></span>
+    <button class="ghost" style="margin-left:auto" onclick="alert('In the real panel this exports a CSV of the fulfilled orders. Disabled in the sandbox.')">⬇ Export CSV</button>
+  </div>
+  <div id="fulfilled"></div>
+
+  <div class="sectitle collapser" id="chead" onclick="toggleSection('cancelled')" style="display:flex;align-items:center;gap:8px">
+    <span class="cav">▾</span><span>Cancelled this stream</span><span class="secount" id="c-count"></span>
+  </div>
+  <div id="cancelled"></div>
+</main>
+
+<div class="modal" id="confirmModal">
+  <div class="card">
+    <h3 id="cm-title">Confirm</h3>
+    <p id="cm-body"></p>
+    <div class="row"><button class="ghost" id="cm-cancel">Cancel</button><button class="primary" id="cm-ok">Confirm</button></div>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="card">
+    <h3>Priority items</h3>
+    <p>Any order containing one of these (matched inside the item name) jumps to the top. One per line. Example: <em>break</em>, <em>slab</em>, <em>PSA 10</em>.</p>
+    <textarea id="pri-input" placeholder="break&#10;slab&#10;box break"></textarea>
+    <div class="row"><button class="ghost" onclick="closePriority()">Cancel</button><button class="primary" onclick="savePriority()">Save</button></div>
+  </div>
+</div>
+
+<script>
+  // ---------------- In-browser mock engine (no server) ----------------
+  let state = { queue: [], fulfilled: [], cancelled: [], stats: {}, config: { priorityItems: [] } };
+  let live = false;
+  let priorityItems = ['legendary collection','1st edition base set','god tier mystery bag','alien tier mystery bag'];
+  let bumpedBuyerId = null;
+  let tick = 1, idc = 1;
+  const orders = [];        // active orders
+  const fulfilledRecs = []; // {key,buyer,buyerId,itemCount,total,orderIds,_orders}
+  const cancelledRecs = [];
+
+  function genId(){ return '576856' + String(10000000 + (idc++)*37).padStart(11,'0'); }
+  function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+  function money(n){return '$'+Number(n||0).toFixed(2);}
+  function shortId(id){ const s=String(id); return s.length>8 ? '…'+s.slice(-8) : s; }
+  function isPri(items){ return items.some(it=> priorityItems.some(p=> p && it.name.toLowerCase().includes(p.toLowerCase()))); }
+  function mergeItems(os){ const m=new Map(); for(const o of os) for(const it of o.items){ m.set(it.name,(m.get(it.name)||0)+it.qty);} return [...m].map(([name,qty])=>({name,qty})); }
+  function qtyCount(os){ return os.reduce((s,o)=>s+o.items.reduce((x,i)=>x+i.qty,0),0); }
+
+  function activeSlots(){
+    const map=new Map();
+    for(const o of orders){ if(!map.has(o.buyerId)) map.set(o.buyerId,[]); map.get(o.buyerId).push(o); }
+    const slots=[];
+    for(const [buyerId,os] of map){
+      os.sort((a,b)=>a.createdAt-b.createdAt);
+      const priTimes=os.filter(o=>isPri(o.items)).map(o=>o.createdAt);
+      const reCount=os.filter(o=>o.mergedWhileTop).length;
+      slots.push({
+        key:buyerId, buyerId, buyer:os[0].buyer, items:mergeItems(os), total:os.reduce((s,o)=>s+o.total,0),
+        orderIds:os.map(o=>o.id), orderCount:os.length, isPriority:priTimes.length>0,
+        priorityAt: priTimes.length?Math.min(...priTimes):Infinity, createdAt:os[0].createdAt,
+        reorderedAtTop:reCount>0, reorderedAtTopCount:reCount, onHold:os.some(o=>o.onHold),
+        priorFulfilled: fulfilledRecs.filter(r=>r.buyerId===buyerId).reduce((s,r)=>s+r.orderIds.length,0),
+        bumped: bumpedBuyerId===buyerId,
+        orderLines: os.map(o=>({id:o.id, items:o.items, addedSinceTop:!!o.mergedWhileTop}))
+      });
+    }
+    slots.sort((a,b)=>{
+      if(a.bumped!==b.bumped) return a.bumped?-1:1;
+      if(a.isPriority!==b.isPriority) return a.isPriority?-1:1;
+      if(a.isPriority) return a.priorityAt-b.priorityAt;
+      return a.createdAt-b.createdAt;
+    });
+    slots.forEach((s,i)=>s.position=i+1);
+    return slots;
+  }
+  function computeState(){
+    const q=activeSlots();
+    state={ queue:q, fulfilled:fulfilledRecs.slice().reverse(), cancelled:cancelledRecs.slice().reverse(),
+      config:{priorityItems},
+      stats:{ live, activeCount:q.length, priorityCount:q.filter(e=>e.isPriority).length,
+        activeValue:q.reduce((s,e)=>s+e.total,0), fulfilledCount:fulfilledRecs.reduce((s,r)=>s+r.orderIds.length,0) } };
+  }
+  function commit(){ computeState(); render(); }
+
+  function pushOrder(buyer, buyerId, items, total, onHold){
+    const slots=activeSlots(); const top=slots[0];
+    const hasActive=orders.some(o=>o.buyerId===buyerId);
+    const mergedWhileTop = hasActive && top && top.buyerId===buyerId;
+    orders.push({ id:genId(), buyerId, buyer, items, total, createdAt:tick++, onHold:!!onHold, mergedWhileTop });
+    commit();
+  }
+  function removeByBuyer(buyerId){ for(let i=orders.length-1;i>=0;i--) if(orders[i].buyerId===buyerId) orders.splice(i,1); }
+
+  // ---------------- Actions (local) ----------------
+  function fulfill(key){
+    const os=orders.filter(o=>o.buyerId===key); if(!os.length) return;
+    fulfilledRecs.push({ key:'F'+(idc++), buyer:os[0].buyer, buyerId:key, itemCount:qtyCount(os),
+      total:os.reduce((s,o)=>s+o.total,0), orderIds:os.map(o=>o.id), _orders:os.map(o=>({...o})) });
+    removeByBuyer(key); if(bumpedBuyerId===key) bumpedBuyerId=null; commit();
+  }
+  function bump(key){ bumpedBuyerId = key; commit(); }
+  async function removeOrder(key){
+    if(!(await uiConfirm({title:'Remove this order from the queue?',
+      body:'Use this if the buyer cancelled. It leaves the queue and is not counted as fulfilled.',
+      confirmText:'Remove order', danger:true}))) return;
+    const os=orders.filter(o=>o.buyerId===key); if(!os.length) return;
+    cancelledRecs.push({ key:'C'+(idc++), buyer:os[0].buyer, buyerId:key, itemCount:qtyCount(os),
+      total:os.reduce((s,o)=>s+o.total,0), orderIds:os.map(o=>o.id), _orders:os.map(o=>({...o})) });
+    removeByBuyer(key); if(bumpedBuyerId===key) bumpedBuyerId=null; commit();
+  }
+  function reopenOrder(key){
+    const list = key[0]==='C' ? cancelledRecs : fulfilledRecs;
+    const i=list.findIndex(r=>r.key===key); if(i<0) return;
+    const rec=list[i];
+    if(orders.some(o=>o.buyerId===rec.buyerId)){ alert("That buyer already has a newer order in the queue, so it can't merge back automatically."); return; }
+    for(const o of rec._orders){ o.mergedWhileTop=false; orders.push(o); }
+    list.splice(i,1); commit();
+  }
+  async function toggleLive(){
+    if(!live){ if(!(await uiConfirm({title:'Start a new live?', body:'Begins accepting orders. (In the sandbox, orders can be added anytime.)', confirmText:'Go live'}))) return; live=true; }
+    else { if(!(await uiConfirm({title:'End the live?', body:'In the real panel this archives the stream to Past streams and clears the board. In the sandbox it just flips the badge.', confirmText:'End live', danger:true}))) return; live=false; }
+    commit();
+  }
+  async function resetQueue(){
+    if(!(await uiConfirm({title:'Reset the entire board?', body:'Clears every active, fulfilled, and cancelled order. (Sandbox only — nothing real.)', confirmText:'Yes, reset', danger:true}))) return;
+    orders.length=0; fulfilledRecs.length=0; cancelledRecs.length=0; bumpedBuyerId=null; commit();
+  }
+
+  // ---------------- Confirm modal ----------------
+  function uiConfirm({title, body, confirmText='Confirm', danger=false}){
+    return new Promise((resolve)=>{
+      const m=document.getElementById('confirmModal');
+      document.getElementById('cm-title').textContent=title;
+      document.getElementById('cm-body').textContent=body;
+      const ok=document.getElementById('cm-ok'), cancel=document.getElementById('cm-cancel');
+      ok.textContent=confirmText; ok.className=danger?'danger':'primary'; m.classList.add('open');
+      const done=(v)=>{ m.classList.remove('open'); ok.onclick=null; cancel.onclick=null; resolve(v); };
+      ok.onclick=()=>done(true); cancel.onclick=()=>done(false);
+    });
+  }
+
+  // ---------------- Label (real, client-side) ----------------
+  function printLabel(key){
+    const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
+    const uname=e.buyer||'Buyer'; const ords=(e.orderIds||[]);
+    const ordLine=ords.map(id=>'#'+id).join('   ');
+    const countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
+    const flags=[]; if(e.priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
+    const dupe=(state.queue||[]).filter(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase()).length>1;
+    const idTag=dupe?('id …'+String(e.buyerId||'').slice(-4)):'';
+    const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page{size:2.25in 1.25in;margin:0} html,body{margin:0;padding:0;width:2.25in;height:1.25in}
+      body{display:flex;flex-direction:column;justify-content:center;align-items:center;box-sizing:border-box;padding:0.05in 0.08in;font-family:Arial,Helvetica,sans-serif;text-align:center;color:#000;background:#fff;overflow:hidden}
+      .flag{border:1.5px solid #000;color:#000;font-weight:800;font-size:8.5px;padding:1px 6px;border-radius:3px;letter-spacing:.4px;margin-bottom:3px;white-space:nowrap}
+      .uname{font-weight:800;line-height:1.03;max-width:100%} .idtag{font-size:8px;font-weight:700;margin-top:1px}
+      .count{font-size:10px;font-weight:700;margin-top:2px;text-transform:uppercase;letter-spacing:.4px}
+      .ord{margin-top:5px;font-family:'Courier New',monospace;font-weight:700;line-height:1.15;word-break:break-all;max-width:100%}
+    </style></head><body>
+      ${flags.map(f=>`<div class="flag">${esc(f)}</div>`).join('')}
+      <div class="uname" id="u">${esc(uname)}</div>
+      ${idTag?`<div class="idtag">${esc(idTag)}</div>`:''}
+      ${countLine?`<div class="count">${esc(countLine)}</div>`:''}
+      ${ordLine?`<div class="ord" id="o">${esc(ordLine)}</div>`:''}
+      <scr`+`ipt>(function(){function sh(el,st,mn){var s=st;el.style.fontSize=s+'px';while(s>mn&&el.scrollWidth>el.clientWidth){s--;el.style.fontSize=s+'px';}return s;}var u=document.getElementById('u');var o=document.getElementById('o');u.style.whiteSpace='nowrap';var us=sh(u,30,13);if(u.scrollWidth>u.clientWidth)u.style.whiteSpace='normal';if(o)sh(o,13,7);window.focus();setTimeout(function(){window.print();},60);})();</scr`+`ipt>
+    </body></html>`;
+    let f=document.getElementById('labelFrame');
+    if(!f){ f=document.createElement('iframe'); f.id='labelFrame'; f.style.cssText='position:fixed;left:-10000px;top:0;width:2.4in;height:1.4in;border:0;background:#fff'; document.body.appendChild(f); }
+    f.srcdoc=doc;
+  }
+
+  // ---------------- Priority modal ----------------
+  function openPriority(){ document.getElementById('pri-input').value=priorityItems.join('\n'); document.getElementById('modal').classList.add('open'); }
+  function closePriority(){ document.getElementById('modal').classList.remove('open'); }
+  function savePriority(){ priorityItems=document.getElementById('pri-input').value.split('\n').map(s=>s.trim()).filter(Boolean); closePriority(); commit(); }
+
+  // ---------------- Rendering (mirrors the real panel) ----------------
+  const slotNodes=new Map(); const expandedKeys=new Set(); let fulfilledSig='', cancelledSig='';
+  let fulfilledCollapsed=false, cancelledCollapsed=false;
+  function toggleSection(w){ if(w==='fulfilled') fulfilledCollapsed=!fulfilledCollapsed; else cancelledCollapsed=!cancelledCollapsed; applyCollapse(); }
+  function applyCollapse(){
+    const fEl=document.getElementById('fulfilled'),cEl=document.getElementById('cancelled'),fh=document.getElementById('fhead'),ch=document.getElementById('chead');
+    if(fEl) fEl.style.display=fulfilledCollapsed?'none':''; if(fh) fh.classList.toggle('collapsed',fulfilledCollapsed);
+    if(cEl) cEl.style.display=cancelledCollapsed?'none':''; if(ch) ch.classList.toggle('collapsed',cancelledCollapsed);
+  }
+  function toggleExpand(key){ if(expandedKeys.has(key)) expandedKeys.delete(key); else expandedKeys.add(key); const n=slotNodes.get(key); if(n) n.classList.toggle('expanded',expandedKeys.has(key)); }
+
+  function slotInner(e){
+    const itemStr=e.items.map(i=>`${i.qty}× ${i.name}`).join(', ');
+    const priBadge=e.isPriority?'<span class="badge pri">PRIORITY</span>':'';
+    const countBadge=`<span class="badge multi">${e.orderCount} order${e.orderCount===1?'':'s'}</span>`;
+    const raCount=e.reorderedAtTopCount||0;
+    const reorderBadge=(raCount>0&&e.position===1)?`<span class="badge reorder" title="Ordered again while at the TOP — add to the bag in progress.">＋ ADDED MORE${raCount>1?' ×'+raCount:''}</span>`:'';
+    const backBadge=(e.priorFulfilled>0)?`<span class="badge back" title="Already had order(s) fulfilled earlier this stream.">🔁 ${e.priorFulfilled} earlier today</span>`:'';
+    const dupBadge=e._dupName?`<span class="badge samename" title="Another buyer shares this exact display name.">⚠ SAME NAME</span>`:'';
+    const holdBadge=e.onHold?`<span class="badge hold" title="On hold — usually a buyer cancel request. Check before shipping.">⚠ CANCEL REQ</span>`:'';
+    const idTag=e._dupName?`<span class="idtag">id …${esc(e._idTag)}</span>`:'';
+    const ordNos=`<span class="ordno">${e.orderIds.map(id=>'#'+esc(shortId(id))).join(' ')}</span>`;
+    const lines=e.orderLines||e.orderIds.map(id=>({id,items:e.items,addedSinceTop:false}));
+    const multi=lines.length>1;
+    const itemRow=(i)=>`<div class="di"><span class="diq">${i.qty}×</span><span>${esc(i.name)}</span></div>`;
+    const groupHtml=(l)=>(multi?`<div class="dgh">#${esc(shortId(l.id))}</div>`:'')+(l.items||[]).map(itemRow).join('');
+    const base=lines.filter(l=>!l.addedSinceTop), added=lines.filter(l=>l.addedSinceTop);
+    let detailItems=base.map(groupHtml).join('');
+    if(added.length) detailItems+=`<div class="dsub">＋ Added since top of queue</div>`+added.map(groupHtml).join('');
+    const detailOrds=`<div class="dord">Full order number${e.orderIds.length>1?'s':''}: ${e.orderIds.map(id=>'#'+esc(id)).join('  ')}</div>`;
+    return `<div class="slotmain">`
+      +`<button class="removeb" title="Remove (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`
+      +`<div class="pos">${e.position}</div>`
+      +`<div class="who"><div class="name">${esc(e.buyer)} ${idTag} ${priBadge} ${countBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos}</div>`
+      +`<div class="items">${esc(itemStr)}</div></div>`
+      +`<button class="caret" title="Show every item" onclick="toggleExpand('${e.key}')">▸</button>`
+      +`<button class="labelb" title="Print 2.25×1.25 label" onclick="printLabel('${e.key}')">🏷 Label</button>`
+      +`<div class="money">${money(e.total)}</div>`
+      +`<div class="actions">${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
+      +`<button class="fulfill" onclick="fulfill('${e.key}')">✓ Fulfilled</button></div>`
+      +`</div><div class="details">${detailItems}${detailOrds}</div>`;
+  }
+  function slotSig(e){ return [e.position,e.buyer,e.isPriority,e.bumped,e.orderCount,e.total,e.priorFulfilled||0,e.reorderedAtTopCount||0,e.onHold?1:0,e._dupName?1:0,e._idTag||'',e.orderIds.join(','),e.items.map(i=>i.qty+'x'+i.name).join('|')].join('~'); }
+  function renderQueue(){
+    const filter=(document.getElementById('search').value||'').toLowerCase();
+    const nameCounts={}; for(const e of (state.queue||[])){ const n=(e.buyer||'').toLowerCase(); nameCounts[n]=(nameCounts[n]||0)+1; }
+    const list=(state.queue||[]).filter(e=>!filter||e.buyer.toLowerCase().includes(filter));
+    for(const e of list){ e._dupName=nameCounts[(e.buyer||'').toLowerCase()]>1; e._idTag=e._dupName?String(e.buyerId||'').slice(-4):''; }
+    const qEl=document.getElementById('queue');
+    if(!list.length){ if(!qEl.querySelector('.empty')) qEl.innerHTML='<div class="empty">Queue is empty — add an order above.</div>'; slotNodes.forEach(n=>n.remove()); slotNodes.clear(); return; }
+    const em=qEl.querySelector('.empty'); if(em) em.remove();
+    const seen=new Set();
+    list.forEach((e,idx)=>{
+      seen.add(e.key); let node=slotNodes.get(e.key); const sig=slotSig(e);
+      if(!node){ node=document.createElement('div'); node.className='slot new'+(e.isPriority?' priority':'')+(e.bumped?' bumped':'')+((e.reorderedAtTop&&e.position===1)?' reorder':'')+(e.onHold?' onhold':''); node.innerHTML=slotInner(e); node._sig=sig; slotNodes.set(e.key,node); setTimeout(()=>node.classList.remove('new'),260); }
+      else if(node._sig!==sig){ node.className='slot'+(e.isPriority?' priority':'')+(e.bumped?' bumped':'')+((e.reorderedAtTop&&e.position===1)?' reorder':'')+(e.onHold?' onhold':''); node.innerHTML=slotInner(e); node._sig=sig; }
+      node.classList.toggle('expanded',expandedKeys.has(e.key));
+      if(qEl.children[idx]!==node) qEl.insertBefore(node,qEl.children[idx]||null);
+    });
+    for(const [key,node] of slotNodes){ if(!seen.has(key)){ node.remove(); slotNodes.delete(key); expandedKeys.delete(key); } }
+  }
+  function render(){
+    const st=state.stats||{}; const isLive=!!st.live;
+    document.getElementById('dot').classList.toggle('live',isLive);
+    const badge=document.getElementById('liveBadge'); badge.textContent=isLive?'LIVE':'OFFLINE'; badge.classList.toggle('on',isLive);
+    const lb=document.getElementById('liveBtn'); lb.textContent=isLive?'■ End Live':'● Go Live'; lb.classList.toggle('off',!isLive);
+    document.getElementById('offline-banner').style.display=isLive?'none':'block';
+    document.getElementById('s-active').textContent=st.activeCount||0;
+    document.getElementById('s-pri').textContent=st.priorityCount||0;
+    document.getElementById('s-val').textContent=money(st.activeValue);
+    document.getElementById('s-done').textContent=st.fulfilledCount||0;
+    const chips=document.getElementById('pri-chips'); const chipSig=(state.config.priorityItems||[]).join('|');
+    if(chips._sig!==chipSig){ chips._sig=chipSig; chips.innerHTML=(state.config.priorityItems||[]).map(p=>`<span class="chip">⭐ ${esc(p)}</span>`).join(''); }
+    renderQueue();
+    const fEl=document.getElementById('fulfilled'); const f=state.fulfilled||[];
+    document.getElementById('f-count').textContent=f.length?'('+f.length+')':'';
+    const fSig=JSON.stringify(f.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderIds||[]).join(',')]));
+    if(fSig!==fulfilledSig){ fulfilledSig=fSig; fEl.innerHTML=f.length?f.map(s=>`<div class="done-row"><span class="ordno">${(s.orderIds||[]).map(id=>'#'+esc(id)).join(' ')}</span><span class="name">${esc(s.buyer)}</span><span>${s.itemCount} item${s.itemCount===1?'':'s'}</span><span style="margin-left:auto">${money(s.total)}</span><button class="undob" onclick="reopenOrder('${s.key}')">↩ Undo</button></div>`).join(''):'<div class="empty">Nothing fulfilled yet.</div>'; }
+    const cEl=document.getElementById('cancelled'); const c=state.cancelled||[];
+    document.getElementById('c-count').textContent=c.length?'('+c.length+')':'';
+    const cSig=JSON.stringify(c.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderIds||[]).join(',')]));
+    if(cSig!==cancelledSig){ cancelledSig=cSig; cEl.innerHTML=c.length?c.map(s=>`<div class="done-row cancel-row"><span class="ordno">${(s.orderIds||[]).map(id=>'#'+esc(id)).join(' ')}</span><span class="name">${esc(s.buyer)}</span><span>${s.itemCount} item${s.itemCount===1?'':'s'}</span><span style="margin-left:auto">${money(s.total)}</span><button class="undob" onclick="reopenOrder('${s.key}')">↩ Restore</button></div>`).join(''):'<div class="empty">No cancelled orders.</div>'; }
+    applyCollapse();
+  }
+
+  // ---------------- Demo data generators ----------------
+  const BUYERS=['pokedad','holo_hunter','pikapapi','charizard_carl','piggybankpro','ripqueen','binderbabe','tjcardsfan','chaserchloe','elite_trainer'];
+  const NORMAL=['Pokémon 151 Booster Pack','Prismatic Evolutions Booster Pack','Surging Sparks Booster Pack','Piggy Bank Booster Pack Bundle - 151','Piggy Bank Booster Pack Bundle - White Flare','Piggy Bank Booster Pack Bundle - Black Bolt'];
+  const PRItems=['Legendary Collection Booster Pack','(Guaranteed Holo) 1st Edition Base Set Booster Pack','TJ Cardshop x PokePig God Tier Mystery Bag','TJ Cardshop x PokePig Alien Tier Mystery Bag'];
+  let bi=0;
+  function nextBuyer(){ const b=BUYERS[bi%BUYERS.length]; bi++; return {buyer:b, buyerId:'B-'+b+'-'+bi}; }
+  function pick(a){ return a[Math.floor((tick*7+idc*3)%a.length)]; }
+  function addNormal(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:pick(NORMAL),qty:1}], 5+(tick%25)); }
+  function addPriority(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:pick(PRItems),qty:1}], 60+(tick%60)); }
+  function addQtyOrder(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:'Piggy Bank Booster Pack Bundle - White Flare',qty:5}], 25); }
+  function addRepeatTop(){ const top=(state.queue||[])[0]; if(!top){ alert('Add an order first, then this adds another for whoever is #1.'); return; } pushOrder(top.buyer, top.buyerId, [{name:'Piggy Bank Booster Pack Bundle - Prismatic',qty:1}], 15); }
+  function addSameName(){ const existing=(state.queue||[]).find(e=>!e._twin); const nm= existing?existing.buyer:'cardfiend'; if(!live) live=true; pushOrder(nm,'B-twin-'+(idc), [{name:pick(NORMAL),qty:1}], 12); }
+  function addHold(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:pick(NORMAL),qty:1}], 20, true); }
+  function clearAll(){ orders.length=0; fulfilledRecs.length=0; cancelledRecs.length=0; bumpedBuyerId=null; commit(); }
+
+  function loadSample(){
+    orders.length=0; fulfilledRecs.length=0; cancelledRecs.length=0; bumpedBuyerId=null; live=true;
+    priorityItems=['legendary collection','1st edition base set','god tier mystery bag','alien tier mystery bag'];
+    // earlier-today: fulfill a pokedad order first, so his later order flags "earlier today"
+    pushOrder('pokedad','B-pokedad',[{name:'Pokémon 151 Booster Pack',qty:1}],18); fulfill('B-pokedad');
+    // Priority (Alien Tier Mystery Bag) jumps to #1, then adds more Piggy Bank bundles while #1
+    pushOrder('holo_hunter','B-holo',[{name:'TJ Cardshop x PokePig Alien Tier Mystery Bag',qty:1}],120);
+    pushOrder('holo_hunter','B-holo',[{name:'Piggy Bank Booster Pack Bundle - Ascended Heroes',qty:2}],90);
+    pushOrder('holo_hunter','B-holo',[{name:'Piggy Bank Booster Pack Bundle - Prismatic',qty:1}],45);
+    // second priority (God Tier) sits just below
+    pushOrder('elite_trainer','B-elite',[{name:'TJ Cardshop x PokePig God Tier Mystery Bag',qty:1}],85);
+    // merge with quantities (two different bundles in one bag)
+    pushOrder('charizard_carl','B-carl',[{name:'Pokémon 151 Booster Pack',qty:1}],24);
+    pushOrder('charizard_carl','B-carl',[{name:'Prismatic Evolutions Booster Pack',qty:1}],12);
+    // a big-quantity bundle order
+    pushOrder('binderbabe','B-binder',[{name:'Piggy Bank Booster Pack Bundle - White Flare',qty:5}],95);
+    pushOrder('pokedad','B-pokedad',[{name:'Surging Sparks Booster Pack',qty:1}],15); // returns -> earlier today
+    // same display name, two different accounts
+    pushOrder('tjcardsfan','B-tj1',[{name:'Piggy Bank Booster Pack Bundle - Black Bolt',qty:1}],20);
+    pushOrder('tjcardsfan','B-tj2',[{name:'Prismatic Evolutions Booster Pack',qty:1}],12);
+    // hold / cancel request
+    pushOrder('ripqueen','B-rip',[{name:'Pokémon 151 Booster Pack',qty:1}],22,true);
+    pushOrder('chaserchloe','B-chloe',[{name:'Piggy Bank Booster Pack Bundle - 151',qty:1}],24);
+    // a cancelled example
+    pushOrder('oops_cancelled','B-oops',[{name:'Pokémon 151 Booster Pack',qty:1}],10);
+    const os=orders.filter(o=>o.buyerId==='B-oops');
+    cancelledRecs.push({key:'C'+(idc++),buyer:'oops_cancelled',buyerId:'B-oops',itemCount:1,total:10,orderIds:os.map(o=>o.id),_orders:os.map(o=>({...o}))});
+    removeByBuyer('B-oops');
+    commit();
+  }
+
+  loadSample();
+</script>
+</body>
+</html>

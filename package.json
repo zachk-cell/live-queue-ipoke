@@ -1,0 +1,23 @@
+{
+  "name": "tcg-live-queue",
+  "version": "1.0.0",
+  "description": "Automated live order queue for TikTok Shop TCG sellers — real-time web dashboard + Discord mirror.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "SIMULATE=true node server.js",
+    "dev": "SIMULATE=true node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "otplib": "^12.0.1",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  }
+}

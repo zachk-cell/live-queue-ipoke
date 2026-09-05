@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Poke Pig Live Queue</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--panel2:#1d212b;--line:#272c38;--text:#e8ebf2;
+    --muted:#8b93a7;--pri:#ffb020;--pri-bg:#3a2c0c;--done:#25c26e;--hi:#4f8cff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+  header{position:sticky;top:0;background:linear-gradient(180deg,#141824,#0f1115);
+    border-bottom:1px solid var(--line);padding:16px 20px;text-align:center}
+  header h1{font-size:18px;margin:0}
+  header .sub{font-size:12px;color:var(--muted);margin-top:4px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#ff5d5d;display:inline-block;margin-right:6px;box-shadow:0 0 7px rgba(255,93,93,.6)}
+  .dot.live{background:var(--done);box-shadow:0 0 8px var(--done)}
+  main{max-width:560px;margin:0 auto;padding:16px 14px 80px}
+  .find{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);
+    padding:11px 14px;border-radius:10px;font-size:14px;margin-bottom:16px}
+  .row{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
+    border-radius:11px;padding:12px 14px;margin-bottom:8px;animation:pop .18s ease}
+  @keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .row.priority{border-color:var(--pri);background:linear-gradient(90deg,var(--pri-bg),var(--panel))}
+  .row.me{outline:2px solid var(--hi);box-shadow:0 0 14px rgba(79,140,255,.35)}
+  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:20px;width:40px;text-align:center;color:var(--muted)}
+  .row.priority .pos{color:var(--pri)}
+  .name{font-weight:700;font-size:16px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-size:10px;font-weight:700;padding:3px 8px;border-radius:20px;background:var(--pri);color:#2a1e00}
+  .count{margin-left:auto;font-size:12px;color:var(--muted)}
+  .empty{color:var(--muted);text-align:center;padding:48px 20px;border:1px dashed var(--line);border-radius:12px}
+  .note{font-size:11px;color:var(--muted);text-align:center;margin-top:18px}
+  .brand{text-align:center;color:var(--muted);font-size:14px;letter-spacing:.2px;padding:18px 20px 32px;
+    border-top:1px solid var(--line);margin-top:10px;opacity:.95}
+  .brand b{color:var(--text);font-weight:700}
+  .brand a{color:inherit;text-decoration:none}
+  .brand a:hover b{color:var(--hi);text-decoration:underline}
+  /* Piggy Bank Tracker — lives IN the header. On wide screens it pins to the
+     right of the header while the title stays centered; on narrower screens it
+     drops just below the title, still inside the header (so it sits above the
+     queue on phones). */
+  #variants{margin-top:8px;width:100%}
+  .tally{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .tally h2{font-size:12px;margin:0;color:var(--muted);font-weight:700;letter-spacing:.5px;text-transform:uppercase;white-space:nowrap;text-align:center}
+  .tally .grid{display:flex;flex-wrap:wrap;justify-content:center;gap:8px}
+  .vchip{display:flex;align-items:baseline;gap:7px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:6px 12px}
+  .vchip .vl{font-size:13px;color:var(--muted);white-space:nowrap}
+  .vchip .vn{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--pri)}
+  /* Open events list (iPoke) */
+  #events{margin-bottom:16px}
+  .ev-h{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin:2px 4px 8px}
+  .ev{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
+    border-left:3px solid var(--pri);border-radius:11px;padding:11px 14px;margin-bottom:8px}
+  .ev .evtype{font-size:10px;font-weight:800;letter-spacing:.4px;padding:3px 8px;border-radius:20px;flex:none}
+  .ev .evtype.quack{background:#123a2a;color:#57e0a6}
+  .ev .evtype.wta{background:var(--pri-bg);color:var(--pri)}
+  .ev .evname{font-weight:700;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev .evspots{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;flex:none;text-align:right}
+  .ev .evspots .n{color:var(--done);font-size:17px}
+  .ev .evspots .sub{display:block;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  .ev.full{border-left-color:var(--muted);opacity:.75}
+  .ev.full .evspots .n{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="dot" class="dot"></span>Poke Pig Live Queue</h1>
+  <div class="sub" id="sub">Waiting for the live to start…</div>
+  <div id="variants"></div>
+</header>
+<main>
+  <div id="events"></div>
+  <input id="find" class="find" placeholder="Type your username to highlight your spot…" oninput="render()" />
+  <div id="list"></div>
+  <div class="note">Order totals and personal details are private and never shown here.</div>
+</main>
+<footer class="brand">Queue built by <a href="https://www.tiktok.com/@palmbeachcardco" target="_blank" rel="noopener noreferrer"><b>Palm Beach Card Co</b></a> (Zach Rips)</footer>
+<script>
+  const socket = io('/public');
+  let state = { queue: [], stats: {} };
+  socket.on('state', (s) => { state = s; render(); });
+
+  function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+  function renderVariants(){
+    const box = document.getElementById('variants');
+    const vs = state.variants || [];
+    if(!vs.length){ box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="tally"><h2>Piggy Bank Tracker</h2><div class="grid">${
+      vs.map(v=>`<div class="vchip"><span class="vl">${esc(v.label)}</span><span class="vn">${Number(v.count)||0}</span></div>`).join('')
+    }</div></div>`;
+  }
+
+  // Open events (iPoke): name + spots remaining, until the event is closed.
+  function renderEvents(){
+    const box = document.getElementById('events');
+    const evs = state.events || [];
+    if(!evs.length){ box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="ev-h">🎟 Open events</div>` + evs.map(e=>{
+      const type = e.type==='wta' ? 'WTA' : 'QUACK';
+      const hasTotal = Number(e.totalSpots) > 0;
+      const spotsHtml = e.soldOut
+        ? `<span class="n">FULL</span><span class="sub">sold out</span>`
+        : (hasTotal
+            ? `<span class="n">${e.spotsRemaining}</span><span class="sub">spot${e.spotsRemaining===1?'':'s'} left</span>`
+            : `<span class="n">${e.spotsOrdered}</span><span class="sub">spots in</span>`);
+      return `<div class="ev${e.soldOut?' full':''}">
+        <span class="evtype ${e.type==='wta'?'wta':'quack'}">${type}</span>
+        <span class="evname">${esc(e.title)}</span>
+        <span class="evspots">${spotsHtml}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function render(){
+    const q = state.queue || [];
+    const st = state.stats || {};
+    const live = state.live !== false; // treat missing as live for safety
+    document.getElementById('dot').classList.toggle('live', live); // green = live, red = offline
+    const findBox = document.getElementById('find');
+    const el = document.getElementById('list');
+    renderVariants();
+    renderEvents();
+
+    if(!live){
+      document.getElementById('sub').textContent = 'Offline — no live running right now';
+      findBox.style.display = 'none';
+      el.innerHTML = '<div class="empty">🔴 The live isn\'t running right now, so the queue is closed.<br><br>Check back during the next live!</div>';
+      return;
+    }
+    findBox.style.display = '';
+    document.getElementById('sub').textContent = q.length
+      ? `${st.activeCount} in line${st.priorityCount ? ` · ${st.priorityCount} priority` : ''}`
+      : 'Queue is empty right now.';
+    const me = (findBox.value || '').toLowerCase();
+    if(!q.length){ el.innerHTML = '<div class="empty">No orders in the queue yet.</div>'; return; }
+    el.innerHTML = q.map(e=>{
+      const mine = me && e.buyer.toLowerCase().includes(me);
+      const cls = 'row'+(e.isPriority?' priority':'')+(mine?' me':'');
+      return `<div class="${cls}">
+        <div class="pos">${e.position}</div>
+        <div class="name">${esc(e.buyer)}</div>
+        ${e.isPriority?'<span class="tag">PRIORITY</span>':''}
+      </div>`;
+    }).join('');
+  }
+  render();
+</script>
+</body>
+</html>

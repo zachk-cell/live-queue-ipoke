@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>iPoke Live Queue — Overlay</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  /* OBS browser source. Background is transparent so it composites over video.
+     Query params:
+       ?rows=N     how many positions to show (default 12)
+       ?side=left  panel side: left (default) or right
+       ?title=...  override the queue title
+       ?bg=1       add a subtle dark backing panel (default on; ?bg=0 for none)
+       ?scale=1.2  scale the whole overlay up/down (default 1) */
+  :root{
+    --accent:#4f8cff; --pri:#ffb020; --done:#25c26e; --tt:#69c9ff; --sf:#b39cff;
+    --card:rgba(16,19,26,.82); --line:rgba(255,255,255,.10); --text:#ffffff; --muted:#c2c9d6;
+  }
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--text)}
+  #wrap{position:fixed;top:18px;bottom:18px;width:430px;display:flex;flex-direction:column;
+    transform-origin:top left}
+  #wrap.left{left:18px} #wrap.right{right:18px;left:auto}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    box-shadow:0 8px 30px rgba(0,0,0,.45);backdrop-filter:blur(6px);
+    display:flex;flex-direction:column;overflow:hidden;max-height:100%}
+  .panel.nobg{background:transparent;border:none;box-shadow:none;backdrop-filter:none}
+  .head{padding:14px 18px 12px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid var(--line)}
+  .head.evt{background:linear-gradient(90deg,rgba(255,176,32,.20),transparent)}
+  .live-dot{width:11px;height:11px;border-radius:50%;background:var(--done);
+    box-shadow:0 0 10px var(--done);flex:none;animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .title{font-size:19px;font-weight:800;letter-spacing:.3px;text-shadow:0 2px 6px rgba(0,0,0,.5)}
+  .count{margin-left:auto;font-size:14px;font-weight:800;color:var(--muted)}
+  .evt-sub{padding:6px 18px 0;font-size:13px;color:var(--muted);line-height:1.4}
+  .evt-meter{margin:10px 18px 4px;height:9px;border-radius:6px;background:rgba(255,255,255,.10);overflow:hidden}
+  .evt-meter > i{display:block;height:100%;background:linear-gradient(90deg,var(--pri),#ffd27a)}
+  .evt-spots{padding:6px 18px 2px;font-size:13px;font-weight:700}
+  .evt-spots .rem{color:var(--pri)} .evt-spots .full{color:var(--done)}
+  .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
+  .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
+    background:rgba(255,255,255,.04)}
+  .row.top{background:linear-gradient(90deg,rgba(79,140,255,.22),rgba(255,255,255,.03));
+    box-shadow:inset 0 0 0 1px rgba(79,140,255,.5)}
+  .row.pri{background:linear-gradient(90deg,rgba(255,176,32,.20),rgba(255,255,255,.03))}
+  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:19px;min-width:30px;text-align:center;color:var(--muted)}
+  .row.top .pos{color:var(--accent)} .row.pri .pos{color:var(--pri)}
+  .nm{flex:1;min-width:0;font-weight:700;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+    text-shadow:0 2px 5px rgba(0,0,0,.5)}
+  .spots{font-size:13px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums;flex:none}
+  .src{font-size:10.5px;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:6px;flex:none}
+  .src.TT{background:rgba(105,201,255,.18);color:var(--tt)}
+  .src.SF{background:rgba(179,156,255,.18);color:var(--sf)}
+  .src.MIX{background:rgba(255,255,255,.14);color:#dfe4ee}
+  .star{color:var(--pri);flex:none;font-size:14px}
+  .prep{color:var(--done);flex:none;font-size:14px}
+  .more{padding:6px 12px 2px;font-size:13px;color:var(--muted);font-weight:600}
+  .empty{padding:26px 18px;text-align:center;color:var(--muted);font-size:15px}
+  .off{padding:22px 18px;text-align:center;color:var(--muted);font-size:15px}
+</style>
+</head>
+<body>
+<div id="wrap" class="left">
+  <div class="panel" id="panel">
+    <div class="head" id="head">
+      <span class="live-dot" id="dot"></span>
+      <span class="title" id="title">Live Queue</span>
+      <span class="count" id="count"></span>
+    </div>
+    <div id="evtmeta"></div>
+    <div class="list" id="list"></div>
+    <div class="more" id="more"></div>
+  </div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 12, 40));
+  const SIDE = params.get('side') === 'right' ? 'right' : 'left';
+  const TITLE = params.get('title');
+  const SHOW_BG = params.get('bg') !== '0';
+  const SCALE = Math.max(0.5, Math.min(Number(params.get('scale')) || 1, 3));
+
+  const wrap = document.getElementById('wrap');
+  wrap.className = SIDE;
+  wrap.style.transform = `scale(${SCALE})`;
+  if(!SHOW_BG) document.getElementById('panel').classList.add('nobg');
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+  const socket = io('/overlay');
+  let state = { live:false, queue:[], event:null, stats:{} };
+  socket.on('state', (s)=>{ state = s; render(); });
+
+  function render(){
+    const head = document.getElementById('head');
+    const list = document.getElementById('list');
+    const meta = document.getElementById('evtmeta');
+    const moreEl = document.getElementById('more');
+    const titleEl = document.getElementById('title');
+    const countEl = document.getElementById('count');
+    const dot = document.getElementById('dot');
+
+    if(!state.live){
+      head.classList.remove('evt');
+      titleEl.textContent = TITLE || 'Queue';
+      countEl.textContent = '';
+      meta.innerHTML = '';
+      moreEl.textContent = '';
+      dot.style.background = '#ff5d5d'; dot.style.boxShadow='0 0 10px #ff5d5d';
+      list.innerHTML = '<div class="off">Queue is closed.</div>';
+      return;
+    }
+    dot.style.background = ''; dot.style.boxShadow='';
+
+    // ── Event mode: an event side-queue is toggled active ──
+    if(state.event){
+      const ev = state.event;
+      head.classList.add('evt');
+      titleEl.textContent = TITLE || ev.title || (ev.type==='wta'?'WTA Event':'Quack Pack');
+      countEl.textContent = ev.entries.length + (ev.entries.length===1?' spot':' spots');
+      const pct = ev.totalSpots>0 ? Math.min(100, Math.round(ev.spotsOrdered/ev.totalSpots*100)) : 0;
+      meta.innerHTML =
+        (ev.description?`<div class="evt-sub">${esc(ev.description)}</div>`:'')
+        + (ev.totalSpots>0?`<div class="evt-meter"><i style="width:${pct}%"></i></div>`:'')
+        + `<div class="evt-spots">`
+          + (ev.totalSpots>0
+              ? (ev.soldOut
+                  ? `<span class="full">SOLD OUT — ${ev.spotsOrdered}/${ev.totalSpots} spots</span>`
+                  : `${ev.spotsOrdered}/${ev.totalSpots} spots · <span class="rem">${ev.spotsRemaining} left</span>`)
+              : `${ev.spotsOrdered} spots ordered`)
+          + `</div>`;
+      const rows = ev.entries.slice(0, ROWS);
+      list.innerHTML = rows.length ? rows.map((e,i)=>`
+        <div class="row${i===0?' top':''}">
+          <span class="pos">${e.position}</span>
+          <span class="nm">${esc(e.buyer)}</span>
+          ${e.spots>1?`<span class="spots">×${e.spots}</span>`:''}
+          ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}
+        </div>`).join('') : '<div class="empty">No spots yet.</div>';
+      moreEl.textContent = ev.entries.length>rows.length ? `+${ev.entries.length-rows.length} more` : '';
+      return;
+    }
+
+    // ── Main queue mode ──
+    head.classList.remove('evt');
+    titleEl.textContent = TITLE || 'Live Queue';
+    const q = state.queue||[];
+    countEl.textContent = q.length + (q.length===1?' in line':' in line');
+    meta.innerHTML = '';
+    const rows = q.slice(0, ROWS);
+    list.innerHTML = rows.length ? rows.map((e,i)=>`
+      <div class="row${i===0?' top':''}${e.isPriority?' pri':''}">
+        <span class="pos">${e.position}</span>
+        <span class="nm">${esc(e.buyer)}</span>
+        ${e.isPriority?'<span class="star">★</span>':''}
+        ${e.prepped?'<span class="prep" title="prepped">✓</span>':''}
+        ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}
+      </div>`).join('') : '<div class="empty">Queue is empty — waiting on orders.</div>';
+    moreEl.textContent = q.length>rows.length ? `+${q.length-rows.length} more in line` : '';
+  }
+  render();
+</script>
+</body>
+</html>
