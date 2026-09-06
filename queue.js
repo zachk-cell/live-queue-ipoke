@@ -84,6 +84,12 @@ export class QueueEngine extends EventEmitter {
     // land in the main `orders` map). Prevents double-ingest across restarts.
     this.seenEventOrders = new Set();
 
+    // Label for the per-variant tracker card (the "Piggy Bank" on Poke Pig).
+    // Configurable per store via env so iPoke can call it its own thing
+    // (e.g. "Pokemon TCG: iPoke VAULT"). Shown on the public page, admin, Discord.
+    this.trackerTitle = process.env.TRACKER_TITLE || '🐷 Piggy Bank Tracker';
+    this.trackerSubtitle = process.env.TRACKER_SUBTITLE || 'Persists Across Streams Until Hit';
+
     this._ensureDataDir();
     this._load();
     this._seedFromEnv();
@@ -843,6 +849,8 @@ export class QueueEngine extends EventEmitter {
         value: s.value,
         unfulfilledCount: s.unfulfilledCount || 0,
       })),
+      // Tracker (Piggy Bank / Vault) display labels — configurable per store.
+      tracker: { title: this.trackerTitle, subtitle: this.trackerSubtitle },
       // ── iPoke additions (empty/default for the other stores) ──
       perpetual: this.perpetual,
       combine: {

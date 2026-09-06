@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Poke Pig Live Queue</title>
+<title>iPoke Live Queue</title>
 <script src="/socket.io/socket.io.js"></script>
 <style>
   :root{
@@ -227,7 +227,7 @@
 </head>
 <body>
 <header>
-  <h1><span id="dot" class="dot"></span>Poke Pig Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span id="ttStatus" class="ttbadge" style="display:none"></span></h1>
+  <h1><span id="dot" class="dot"></span>iPoke Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span id="ttStatus" class="ttbadge" style="display:none"></span></h1>
   <a href="/guide" target="_blank" class="hdr-link">📖 Guide ↗</a>
   <a href="{{ADMIN}}/logout" class="hdr-link hdr-logout">Log out</a>
   <div class="stats">
@@ -712,10 +712,11 @@
     const box = document.getElementById('variants-admin');
     const vs = state.variants || [];
     if(!vs.length){ box.innerHTML=''; box._sig=''; return; }
-    const sig = vs.map(v=>v.id+':'+v.label).join('|');
+    const title = (state.tracker && state.tracker.title) || 'Piggy Bank';
+    const sig = vs.map(v=>v.id+':'+v.label).join('|')+'~'+title;
     if(box._sig !== sig){
       box._sig = sig;
-      box.innerHTML = `<div class="vcard"><h3>Piggy Bank Counter</h3>
+      box.innerHTML = `<div class="vcard"><h3>${esc(title)} Counter</h3>
         <p class="vsub">Adds +1 per unit when an order reaches the top of the queue. Shown on the public page. Counts are cumulative and persist across streams — they only change from a sale, a Save, or a Reset.</p>
         ${vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}">
           <div class="vlab">${esc(v.label)}</div>

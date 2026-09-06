@@ -144,6 +144,8 @@ function publicView() {
     // Per-variant sales counters (public tally). Empty on stores that don't
     // configure any, so the public page simply renders nothing.
     variants: (snap.variants || []).map((v) => ({ id: v.id, label: v.label, count: v.count })),
+    // Tracker display labels (Piggy Bank / Vault), configurable per store.
+    tracker: snap.tracker,
     // Currently OPEN events (iPoke) — buyers can see what's available and how
     // many spots remain. Only safe fields; NO buyer names/entries. Drops off the
     // list once the event is ripped/closed. Empty for the TikTok stores.
@@ -599,9 +601,10 @@ if (shopifyEnabled()) {
 }
 
 server.listen(PORT, () => {
-  console.log(`\n  Poke Pig Live Queue running -> http://localhost:${PORT}`);
-  console.log(`  Public site: /  |  Admin (secret): ${ADMIN}  |  Privacy: /privacy`);
+  console.log(`\n  iPoke Live Queue running -> http://localhost:${PORT}`);
+  console.log(`  Public site: /  |  Admin (secret): ${ADMIN}  |  Overlay: /overlay  |  Privacy: /privacy`);
   console.log(`  Mode: ${process.env.SIMULATE === 'true' ? 'SIMULATOR' : 'LIVE'}` +
+    ` | Shopify ingest: ${shopifyEnabled() ? 'ON' : 'off'}` +
     ` | TikTok ingest: ${tiktokEnabled() ? 'ON' : 'off'}` +
     ` | Discord: ${discordEnabled() ? 'ON' : 'off'}\n`);
 });

@@ -74,9 +74,11 @@ function buildPiggyMessage(queue) {
   const snap = queue.snapshot();
   const vs = snap.variants || [];
   if (!vs.length) return null;
+  const title = (snap.tracker && snap.tracker.title) || '🐷 Piggy Bank Tracker';
+  const subtitle = snap.tracker ? snap.tracker.subtitle : 'Persists Across Streams Until Hit';
   const lines = [];
-  lines.push('**🐷 Piggy Bank Tracker**');
-  lines.push('_Persists Across Streams Until Hit_');
+  lines.push(`**${title}**`);
+  if (subtitle) lines.push(`_${subtitle}_`);
   lines.push('');
   const width = Math.max(...vs.map((v) => String(Number(v.count) || 0).length));
   for (const v of vs) {
