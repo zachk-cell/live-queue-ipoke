@@ -90,6 +90,10 @@ export class QueueEngine extends EventEmitter {
     this.trackerTitle = process.env.TRACKER_TITLE || '🐷 Piggy Bank Tracker';
     this.trackerSubtitle = process.env.TRACKER_SUBTITLE || 'Persists Across Streams Until Hit';
 
+    // Live overlay background opacity (0 = transparent .. 1 = solid), controlled
+    // from the admin panel and pushed to the OBS overlay in real time.
+    this.overlayOpacity = 0;
+
     this._ensureDataDir();
     this._load();
     this._seedFromEnv();
@@ -127,6 +131,7 @@ export class QueueEngine extends EventEmitter {
         if (Array.isArray(cfg.events)) this.events = cfg.events;
         this.eventCounter = cfg.eventCounter || 0;
         this.activeEventId = cfg.activeEventId || null;
+        if (Number.isFinite(cfg.overlayOpacity)) this.overlayOpacity = Math.max(0, Math.min(1, cfg.overlayOpacity));
       }
     } catch (e) {
       console.warn('[queue] could not load config:', e.message);
@@ -220,6 +225,10 @@ export class QueueEngine extends EventEmitter {
       const envWin = Number(process.env.COMBINE_WINDOW_MINUTES);
       if (Number.isFinite(envWin) && envWin > 0 && !this._combineLoadedFromDisk) {
         this.combineWindowMs = Math.round(envWin * 60 * 1000);
+      }
+      const envOp = Number(process.env.OVERLAY_OPACITY);
+      if (Number.isFinite(envOp) && !this._combineLoadedFromDisk) {
+        this.overlayOpacity = Math.max(0, Math.min(1, envOp));
       }
     } catch (e) { console.warn('[queue] COMBINE_MODE seed failed:', e.message); }
     // Recompute priority flags in case the env extras changed matching, then save.
@@ -327,6 +336,7 @@ export class QueueEngine extends EventEmitter {
           events: this.events,
           eventCounter: this.eventCounter,
           activeEventId: this.activeEventId,
+          overlayOpacity: this.overlayOpacity,
         })
       );
       // Only write the events-state file when there are (or were) events, so
@@ -853,6 +863,7 @@ export class QueueEngine extends EventEmitter {
       tracker: { title: this.trackerTitle, subtitle: this.trackerSubtitle },
       // ── iPoke additions (empty/default for the other stores) ──
       perpetual: this.perpetual,
+      overlayOpacity: this.overlayOpacity,
       combine: {
         mode: this.combineMode,
         windowMs: this.combineWindowMs,
@@ -1028,6 +1039,17 @@ export class QueueEngine extends EventEmitter {
   }
 
   clearNameOverride(buyerId) { return this.setNameOverride(buyerId, ''); }
+
+  /** Live overlay background opacity (0..1), controlled from the admin panel and
+   *  pushed to the OBS overlay in real time. Text/items are never affected. */
+  setOverlayOpacity(a) {
+    const v = Math.max(0, Math.min(1, Number(a)));
+    if (!Number.isFinite(v)) return false;
+    this.overlayOpacity = v;
+    this._persist();
+    this.emit('change', { reason: 'overlay-opacity', overlayOpacity: v });
+    return true;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // iPoke: prep state (visual "prepped / ready to fulfill" flag per slot)

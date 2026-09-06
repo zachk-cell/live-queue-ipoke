@@ -250,6 +250,9 @@
     <a href="/" target="_blank" style="text-decoration:none"><button class="ghost">Public view ↗</button></a>
     <button id="combinePill" class="combine-pill" style="display:none" onclick="openCombine()">⇄ Combining: <span class="cm" id="cm-label">…</span></button>
     <a href="/overlay" target="_blank" id="overlayLink" style="text-decoration:none;display:none"><button class="ghost">📺 Overlay ↗</button></a>
+    <span id="ovopWrap" class="combine-pill" style="display:none;gap:9px" title="Live overlay background — changes the OBS overlay instantly. Text always stays solid.">📺 Overlay BG
+      <input id="ovopRange" type="range" min="0" max="100" step="1" style="width:110px;accent-color:var(--accent);vertical-align:middle" />
+      <span class="cm" id="ovopPct">0%</span></span>
   </div>
 
   <div class="chips" id="pri-chips"></div>
@@ -807,6 +810,14 @@
     document.getElementById('combinePill').style.display = 'none';
     document.getElementById('overlayLink').style.display = perp ? '' : 'none';
     document.getElementById('events-admin').style.display = perp ? '' : 'none';
+    const ovw = document.getElementById('ovopWrap');
+    ovw.style.display = perp ? 'inline-flex' : 'none';
+    if(perp){
+      const r = document.getElementById('ovopRange');
+      const op = Math.round((state.overlayOpacity != null ? state.overlayOpacity : 0) * 100);
+      // don't fight the operator while they're dragging it
+      if(document.activeElement !== r){ r.value = op; document.getElementById('ovopPct').textContent = op + '%'; }
+    }
 
     document.getElementById('s-active').textContent = st.activeCount||0;
     document.getElementById('s-pri').textContent = st.priorityCount||0;
@@ -1052,6 +1063,19 @@
     if(!j.ok) alert("Couldn't combine these — they must be unfulfilled orders from the SAME buyer.");
     clearCombineSel();
   }
+
+  // ── Live overlay-background slider (pushes to the OBS overlay in real time) ──
+  (function(){
+    const r = document.getElementById('ovopRange');
+    if(!r) return;
+    let t = null;
+    r.addEventListener('input', () => {
+      const v = Number(r.value);
+      document.getElementById('ovopPct').textContent = v + '%';
+      clearTimeout(t);
+      t = setTimeout(() => { postJSON('/api/overlay-opacity', { opacity: v / 100 }); }, 100);
+    });
+  })();
 
   // --- TikTok connection status ---
   async function refreshTikTok(){

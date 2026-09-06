@@ -170,6 +170,7 @@ function overlayView() {
   return {
     live,
     perpetual: !!snap.perpetual,
+    overlayOpacity: snap.overlayOpacity,
     activeEventId: snap.activeEventId || null,
     event: active ? {
       id: active.id,
@@ -354,6 +355,12 @@ app.post('/api/name-override/:buyerId', requireAuth, (req, res) => {
 app.post('/api/prep/:key', requireAuth, (req, res) => {
   const on = !!(req.body && req.body.on);
   res.json({ ok: queue.setPrepped(req.params.key, on) });
+});
+
+// Live overlay background opacity (0..1) — changes the OBS overlay in real time.
+app.post('/api/overlay-opacity', requireAuth, (req, res) => {
+  const ok = queue.setOverlayOpacity(req.body && req.body.opacity);
+  res.json({ ok, overlayOpacity: queue.overlayOpacity });
 });
 
 // Shopify status + raw-order probe (admin only) — for connecting the store.

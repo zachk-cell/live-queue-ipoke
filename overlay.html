@@ -15,7 +15,12 @@
        ?scale=1.2  scale the whole overlay up/down (default 1) */
   :root{
     --accent:#4f8cff; --pri:#ffb020; --done:#25c26e; --tt:#69c9ff; --sf:#b39cff;
-    --card:rgba(16,19,26,.82); --line:rgba(255,255,255,.10); --text:#ffffff; --muted:#c2c9d6;
+    /* Background opacity of the whole panel. 0 = fully transparent (default);
+       raised by the slider or the ?opacity= URL param. */
+    --bg-alpha:0;
+    --card:rgba(16,19,26, calc(var(--bg-alpha) * 0.9));
+    --line:rgba(255,255,255, calc(var(--bg-alpha) * 0.12));
+    --text:#ffffff; --muted:#c2c9d6;
   }
   html,body{margin:0;padding:0;background:transparent;overflow:hidden;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--text)}
@@ -23,16 +28,15 @@
     transform-origin:top left}
   #wrap.left{left:18px} #wrap.right{right:18px;left:auto}
   .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;
-    box-shadow:0 8px 30px rgba(0,0,0,.45);backdrop-filter:blur(6px);
+    box-shadow:0 8px 30px rgba(0,0,0, calc(var(--bg-alpha) * 0.45));
     display:flex;flex-direction:column;overflow:hidden;max-height:100%}
-  .panel.nobg{background:transparent;border:none;box-shadow:none;backdrop-filter:none}
   .head{padding:14px 18px 12px;display:flex;align-items:center;gap:10px;
     border-bottom:1px solid var(--line)}
   .head.evt{background:linear-gradient(90deg,rgba(255,176,32,.20),transparent)}
   .live-dot{width:11px;height:11px;border-radius:50%;background:var(--done);
     box-shadow:0 0 10px var(--done);flex:none;animation:pulse 1.6s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
-  .title{font-size:19px;font-weight:800;letter-spacing:.3px;text-shadow:0 2px 6px rgba(0,0,0,.5)}
+  .title{font-size:19px;font-weight:800;letter-spacing:.3px;text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 8px rgba(0,0,0,.7)}
   .count{margin-left:auto;font-size:14px;font-weight:800;color:var(--muted)}
   .evt-sub{padding:6px 18px 0;font-size:13px;color:var(--muted);line-height:1.4}
   .evt-meter{margin:10px 18px 4px;height:9px;border-radius:6px;background:rgba(255,255,255,.10);overflow:hidden}
@@ -41,15 +45,22 @@
   .evt-spots .rem{color:var(--pri)} .evt-spots .full{color:var(--done)}
   .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
-    background:rgba(255,255,255,.04)}
-  .row.top{background:linear-gradient(90deg,rgba(79,140,255,.22),rgba(255,255,255,.03));
+    background:rgba(255,255,255, calc(var(--bg-alpha) * 0.05))}
+  /* Top + priority rows keep a faint highlight even at full transparency so the
+     next-up slot still reads over video. */
+  .row.top{background:linear-gradient(90deg,rgba(79,140,255, calc(0.14 + var(--bg-alpha) * 0.22)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)));
     box-shadow:inset 0 0 0 1px rgba(79,140,255,.5)}
-  .row.pri{background:linear-gradient(90deg,rgba(255,176,32,.20),rgba(255,255,255,.03))}
-  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:19px;min-width:30px;text-align:center;color:var(--muted)}
+  .row.pri{background:linear-gradient(90deg,rgba(255,176,32, calc(0.12 + var(--bg-alpha) * 0.20)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)))}
+  /* Text + items always stay fully opaque and bold, with strong shadows so they
+     read clearly over any video even when the background is fully transparent.
+     Only background colors follow --bg-alpha. */
+  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:19px;min-width:30px;text-align:center;color:#e6eaf3;
+    text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 7px rgba(0,0,0,.7)}
   .row.top .pos{color:var(--accent)} .row.pri .pos{color:var(--pri)}
-  .nm{flex:1;min-width:0;font-weight:700;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
-    text-shadow:0 2px 5px rgba(0,0,0,.5)}
-  .spots{font-size:13px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums;flex:none}
+  .nm{flex:1;min-width:0;font-weight:800;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+    text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 8px rgba(0,0,0,.75)}
+  .spots{font-size:14px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums;flex:none;
+    text-shadow:0 1px 3px rgba(0,0,0,.95)}
   .src{font-size:10.5px;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:6px;flex:none}
   .src.TT{background:rgba(105,201,255,.18);color:var(--tt)}
   .src.SF{background:rgba(179,156,255,.18);color:var(--sf)}
@@ -59,6 +70,22 @@
   .more{padding:6px 12px 2px;font-size:13px;color:var(--muted);font-weight:600}
   .empty{padding:26px 18px;text-align:center;color:var(--muted);font-size:15px}
   .off{padding:22px 18px;text-align:center;color:var(--muted);font-size:15px}
+  /* Transparency slider — shown only in a normal browser, auto-hidden in OBS. */
+  #ovctl{position:fixed;right:16px;bottom:16px;width:300px;background:#12151c;border:1px solid #2a2f3a;
+    border-radius:12px;padding:12px 14px;color:#e8ebf2;font-size:13px;z-index:9999;
+    box-shadow:0 10px 30px rgba(0,0,0,.5);font-family:inherit}
+  #ovctl .ovrow{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+  #ovctl .ovrow b{font-size:12.5px;letter-spacing:.3px}
+  #ovctl #ovpct{color:#69c9ff;font-weight:800;font-variant-numeric:tabular-nums}
+  #ovctl input[type=range]{width:100%;margin:4px 0 8px;accent-color:#4f8cff}
+  #ovctl .ovhint{color:#8b93a7;font-size:11.5px;line-height:1.4}
+  #ovctl .ovurl{display:flex;gap:6px;margin-top:8px}
+  #ovctl .ovurl input{flex:1;min-width:0;background:#1d212b;border:1px solid #2a2f3a;color:#c2c9d6;
+    border-radius:7px;padding:6px 8px;font-size:11px}
+  #ovctl #ovcopy{background:#2b6bff;border:none;color:#fff;font-weight:700;border-radius:7px;
+    padding:6px 11px;cursor:pointer;font-size:12px}
+  #ovctl #ovcopy:hover{filter:brightness(1.1)}
+  #ovctl #ovcopied{color:#57e0a6;margin-top:6px;min-height:14px;font-size:11.5px}
 </style>
 </head>
 <body>
@@ -79,19 +106,97 @@
   const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 12, 40));
   const SIDE = params.get('side') === 'right' ? 'right' : 'left';
   const TITLE = params.get('title');
-  const SHOW_BG = params.get('bg') !== '0';
   const SCALE = Math.max(0.5, Math.min(Number(params.get('scale')) || 1, 3));
 
   const wrap = document.getElementById('wrap');
   wrap.className = SIDE;
   wrap.style.transform = `scale(${SCALE})`;
-  if(!SHOW_BG) document.getElementById('panel').classList.add('nobg');
+
+  // ── Background transparency ──
+  // By default the overlay FOLLOWS the live setting from the admin panel (pushed
+  // over the socket), so it can be changed as often as you like mid-stream with
+  // nothing to touch in OBS. A ?opacity=0..1 URL param pins this source instead
+  // (useful if you want two overlays at different levels).
+  const clamp01 = (n) => Math.max(0, Math.min(1, n));
+  const urlOpacityRaw = params.get('opacity');
+  const urlForced = urlOpacityRaw !== null && urlOpacityRaw !== '';
+  let localForced = false; // set true if the on-page slider (?controls=1) is used
+  function applyOpacity(a){
+    document.documentElement.style.setProperty('--bg-alpha', a);
+    const panel = document.getElementById('panel');
+    if(panel) panel.style.backdropFilter = a > 0.02 ? 'blur(6px)' : 'none';
+  }
+  let opacity = 0;
+  if(urlForced) opacity = clamp01(Number(urlOpacityRaw) || 0);
+  else if(params.get('bg') === '0') opacity = 0;
+  else if(params.get('bg') === '1') opacity = 0.85;
+  applyOpacity(opacity);
+
+  // The clean URL to paste into OBS, with the chosen opacity baked in (and the
+  // controls flag stripped so the slider never shows on-stream).
+  function obsUrl(a){
+    const u = new URL(location.href);
+    u.searchParams.delete('controls');
+    u.searchParams.set('opacity', a.toFixed(2));
+    return u.toString();
+  }
+
+  // The background level is normally driven live from the admin panel, so the
+  // overlay shows NO on-page slider by default (keeps it clean and OBS-safe).
+  // ?controls=1 opts into a local per-source slider that overrides the live value.
+  function controlsWanted(){ return params.get('controls') === '1'; }
+  function buildControls(){
+    if(document.getElementById('ovctl')) return;
+    const bar = document.createElement('div');
+    bar.id = 'ovctl';
+    bar.innerHTML =
+      '<div class="ovrow"><b>Overlay background</b><span id="ovpct"></span></div>'
+      + '<input id="ovrange" type="range" min="0" max="100" step="1" />'
+      + '<div class="ovhint">Drag for how much backing you want behind the queue, then copy the link into your OBS Browser Source:</div>'
+      + '<div class="ovurl"><input id="ovurl" readonly /><button id="ovcopy">Copy</button></div>'
+      + '<div id="ovcopied"></div>';
+    document.body.appendChild(bar);
+    const range = bar.querySelector('#ovrange');
+    const pct = bar.querySelector('#ovpct');
+    const url = bar.querySelector('#ovurl');
+    const copied = bar.querySelector('#ovcopied');
+    range.value = Math.round(opacity * 100);
+    const refresh = () => {
+      const a = clamp01(Number(range.value) / 100);
+      localForced = true; // local slider now overrides the live admin value
+      opacity = a;
+      applyOpacity(a);
+      pct.textContent = range.value + '%';
+      url.value = obsUrl(a);
+      copied.textContent = '';
+    };
+    range.addEventListener('input', refresh);
+    bar.querySelector('#ovcopy').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(url.value); copied.textContent = '✓ Copied — paste into OBS.'; }
+      catch(e){ url.select(); copied.textContent = 'Select the link above and copy it.'; }
+    });
+    refresh();
+  }
+  if(controlsWanted()) buildControls();
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
   const socket = io('/overlay');
   let state = { live:false, queue:[], event:null, stats:{} };
-  socket.on('state', (s)=>{ state = s; render(); });
+  socket.on('state', (s)=>{
+    state = s;
+    // Follow the live admin setting unless this source is pinned by URL or the
+    // local slider is in use.
+    if(!urlForced && !localForced && typeof s.overlayOpacity === 'number'){
+      opacity = clamp01(s.overlayOpacity);
+      applyOpacity(opacity);
+      const r = document.getElementById('ovrange');
+      const p = document.getElementById('ovpct');
+      if(r) r.value = Math.round(opacity * 100);
+      if(p) p.textContent = Math.round(opacity * 100) + '%';
+    }
+    render();
+  });
 
   function render(){
     const head = document.getElementById('head');
