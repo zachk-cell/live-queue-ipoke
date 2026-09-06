@@ -36,7 +36,7 @@
   .live-dot{width:11px;height:11px;border-radius:50%;background:var(--done);
     box-shadow:0 0 10px var(--done);flex:none;animation:pulse 1.6s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
-  .title{font-size:19px;font-weight:800;letter-spacing:.3px;text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 8px rgba(0,0,0,.7)}
+  .title{font-size:19px;font-weight:800;letter-spacing:.3px;text-shadow:0 2px 6px rgba(0,0,0,.5)}
   .count{margin-left:auto;font-size:14px;font-weight:800;color:var(--muted)}
   .evt-sub{padding:6px 18px 0;font-size:13px;color:var(--muted);line-height:1.4}
   .evt-meter{margin:10px 18px 4px;height:9px;border-radius:6px;background:rgba(255,255,255,.10);overflow:hidden}
@@ -51,16 +51,11 @@
   .row.top{background:linear-gradient(90deg,rgba(79,140,255, calc(0.14 + var(--bg-alpha) * 0.22)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)));
     box-shadow:inset 0 0 0 1px rgba(79,140,255,.5)}
   .row.pri{background:linear-gradient(90deg,rgba(255,176,32, calc(0.12 + var(--bg-alpha) * 0.20)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)))}
-  /* Text + items always stay fully opaque and bold, with strong shadows so they
-     read clearly over any video even when the background is fully transparent.
-     Only background colors follow --bg-alpha. */
-  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:19px;min-width:30px;text-align:center;color:#e6eaf3;
-    text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 7px rgba(0,0,0,.7)}
+  .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:19px;min-width:30px;text-align:center;color:var(--muted)}
   .row.top .pos{color:var(--accent)} .row.pri .pos{color:var(--pri)}
-  .nm{flex:1;min-width:0;font-weight:800;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
-    text-shadow:0 1px 3px rgba(0,0,0,.95), 0 2px 8px rgba(0,0,0,.75)}
-  .spots{font-size:14px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums;flex:none;
-    text-shadow:0 1px 3px rgba(0,0,0,.95)}
+  .nm{flex:1;min-width:0;font-weight:700;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+    text-shadow:0 2px 5px rgba(0,0,0,.5)}
+  .spots{font-size:13px;font-weight:800;color:var(--pri);font-variant-numeric:tabular-nums;flex:none}
   .src{font-size:10.5px;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:6px;flex:none}
   .src.TT{background:rgba(105,201,255,.18);color:var(--tt)}
   .src.SF{background:rgba(179,156,255,.18);color:var(--sf)}
@@ -113,23 +108,23 @@
   wrap.style.transform = `scale(${SCALE})`;
 
   // ── Background transparency ──
-  // By default the overlay FOLLOWS the live setting from the admin panel (pushed
-  // over the socket), so it can be changed as often as you like mid-stream with
-  // nothing to touch in OBS. A ?opacity=0..1 URL param pins this source instead
-  // (useful if you want two overlays at different levels).
+  // 0 = fully transparent (default). Source of the value, in priority order:
+  //   ?opacity=0..1  →  ?bg=0/1 (legacy)  →  saved slider value  →  0.
   const clamp01 = (n) => Math.max(0, Math.min(1, n));
-  const urlOpacityRaw = params.get('opacity');
-  const urlForced = urlOpacityRaw !== null && urlOpacityRaw !== '';
-  let localForced = false; // set true if the on-page slider (?controls=1) is used
+  function initialOpacity(){
+    const p = params.get('opacity');
+    if(p !== null && p !== '') return clamp01(Number(p) || 0);
+    if(params.get('bg') === '0') return 0;
+    if(params.get('bg') === '1') return 0.85;
+    try { const s = localStorage.getItem('overlayOpacity'); if(s !== null) return clamp01(Number(s)); } catch(e){}
+    return 0;
+  }
   function applyOpacity(a){
     document.documentElement.style.setProperty('--bg-alpha', a);
     const panel = document.getElementById('panel');
     if(panel) panel.style.backdropFilter = a > 0.02 ? 'blur(6px)' : 'none';
   }
-  let opacity = 0;
-  if(urlForced) opacity = clamp01(Number(urlOpacityRaw) || 0);
-  else if(params.get('bg') === '0') opacity = 0;
-  else if(params.get('bg') === '1') opacity = 0.85;
+  let opacity = initialOpacity();
   applyOpacity(opacity);
 
   // The clean URL to paste into OBS, with the chosen opacity baked in (and the
@@ -141,10 +136,14 @@
     return u.toString();
   }
 
-  // The background level is normally driven live from the admin panel, so the
-  // overlay shows NO on-page slider by default (keeps it clean and OBS-safe).
-  // ?controls=1 opts into a local per-source slider that overrides the live value.
-  function controlsWanted(){ return params.get('controls') === '1'; }
+  // Show the slider in a normal browser; hide it inside OBS (window.obsstudio is
+  // injected by OBS browser sources). ?controls=1 forces it on, ?controls=0 off.
+  function controlsWanted(){
+    const c = params.get('controls');
+    if(c === '1') return true;
+    if(c === '0') return false;
+    return !window.obsstudio; // default: show unless we're inside OBS
+  }
   function buildControls(){
     if(document.getElementById('ovctl')) return;
     const bar = document.createElement('div');
@@ -163,12 +162,12 @@
     range.value = Math.round(opacity * 100);
     const refresh = () => {
       const a = clamp01(Number(range.value) / 100);
-      localForced = true; // local slider now overrides the live admin value
       opacity = a;
       applyOpacity(a);
       pct.textContent = range.value + '%';
       url.value = obsUrl(a);
       copied.textContent = '';
+      try { localStorage.setItem('overlayOpacity', a); } catch(e){}
     };
     range.addEventListener('input', refresh);
     bar.querySelector('#ovcopy').addEventListener('click', async () => {
@@ -183,20 +182,7 @@
 
   const socket = io('/overlay');
   let state = { live:false, queue:[], event:null, stats:{} };
-  socket.on('state', (s)=>{
-    state = s;
-    // Follow the live admin setting unless this source is pinned by URL or the
-    // local slider is in use.
-    if(!urlForced && !localForced && typeof s.overlayOpacity === 'number'){
-      opacity = clamp01(s.overlayOpacity);
-      applyOpacity(opacity);
-      const r = document.getElementById('ovrange');
-      const p = document.getElementById('ovpct');
-      if(r) r.value = Math.round(opacity * 100);
-      if(p) p.textContent = Math.round(opacity * 100) + '%';
-    }
-    render();
-  });
+  socket.on('state', (s)=>{ state = s; render(); });
 
   function render(){
     const head = document.getElementById('head');
