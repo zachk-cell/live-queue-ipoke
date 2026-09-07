@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Past streams — iPoke Live Queue</title>
+<title>Past Days — iPoke Live Queue</title>
 <style>
   :root{--bg:#0f1115;--panel:#171a21;--panel2:#1d212b;--line:#272c38;--text:#e8ebf2;
     --muted:#8b93a7;--accent:#4f8cff;--done:#25c26e;}
@@ -32,10 +32,10 @@
 <body>
 <header>
   <a class="back" href="{{ADMIN}}">← Back to queue</a>
-  <h1>🗂 Past streams</h1>
+  <h1>🗂 Past Days</h1>
 </header>
 <main>
-  <p class="sub">The last few streams you've run. Each row is one stream — download its full fulfilled-orders list as a spreadsheet.</p>
+  <p class="sub">Fulfilled orders archived by day (resets at 12:00 AM PST). Each row is one day — download its full fulfilled-orders list as a spreadsheet. Unfulfilled orders stay on the live queue.</p>
   <div id="list"><div class="empty">Loading…</div></div>
 </main>
 <script>
@@ -48,14 +48,14 @@
       if(!res.ok){ location.href='{{ADMIN}}'; return; }
       const { history } = await res.json();
       if(!history || !history.length){
-        el.innerHTML = '<div class="empty">No past streams yet.<br><br>Each time you hit <b>Go Live</b> to start a new stream, the previous one is archived here.</div>';
+        el.innerHTML = '<div class="empty">No past days yet.<br><br>Fulfilled orders are archived here automatically at 12:00 AM PST each day.</div>';
         return;
       }
       el.innerHTML = history.map(s=>{
-        const label = new Date(s.endedAt).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+        const when = s.label || new Date(s.endedAt).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
         return `<div class="row">
           <div>
-            <div class="when">Stream ending ${esc(label)}</div>
+            <div class="when">${esc(when)}</div>
             <div class="meta num">${s.count} order${s.count===1?'':'s'} fulfilled · ${money(s.value)} total</div>
           </div>
           <div class="spacer"></div>

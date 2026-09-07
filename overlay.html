@@ -34,8 +34,11 @@
   #wrap{position:fixed;top:18px;bottom:18px;width:430px;display:flex;flex-direction:column;
     transform-origin:top left}
   #wrap.left{left:18px} #wrap.right{right:18px;left:auto}
-  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;
-    box-shadow:0 8px 30px rgba(0,0,0, calc(var(--bg-alpha) * 0.45));
+  /* Thin off-white rounded frame — ALWAYS visible (independent of --bg-alpha) so
+     the overlay's edge is easy to distinguish on screen even at 0% background.
+     The dark 1px ring keeps the frame readable over bright footage too. */
+  .panel{background:var(--card);border:1.5px solid rgba(240,238,230,.55);border-radius:16px;
+    box-shadow:0 0 0 1px rgba(0,0,0,.30), 0 8px 26px rgba(0,0,0, calc(0.12 + var(--bg-alpha) * 0.4));
     display:flex;flex-direction:column;overflow:hidden;max-height:100%}
   .head{padding:14px 18px 12px;display:flex;align-items:center;gap:10px;
     border-bottom:1px solid var(--line)}
@@ -77,22 +80,8 @@
   .more{padding:6px 12px 2px;font-size:13px;color:var(--muted);font-weight:600}
   .empty{padding:26px 18px;text-align:center;color:var(--muted);font-size:15px}
   .off{padding:22px 18px;text-align:center;color:var(--muted);font-size:15px}
-  /* Transparency slider — shown only in a normal browser, auto-hidden in OBS. */
-  #ovctl{position:fixed;right:16px;bottom:16px;width:300px;background:#12151c;border:1px solid #2a2f3a;
-    border-radius:12px;padding:12px 14px;color:#e8ebf2;font-size:13px;z-index:9999;
-    box-shadow:0 10px 30px rgba(0,0,0,.5);font-family:inherit}
-  #ovctl .ovrow{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
-  #ovctl .ovrow b{font-size:12.5px;letter-spacing:.3px}
-  #ovctl #ovpct{color:#69c9ff;font-weight:800;font-variant-numeric:tabular-nums}
-  #ovctl input[type=range]{width:100%;margin:4px 0 8px;accent-color:#4f8cff}
-  #ovctl .ovhint{color:#8b93a7;font-size:11.5px;line-height:1.4}
-  #ovctl .ovurl{display:flex;gap:6px;margin-top:8px}
-  #ovctl .ovurl input{flex:1;min-width:0;background:#1d212b;border:1px solid #2a2f3a;color:#c2c9d6;
-    border-radius:7px;padding:6px 8px;font-size:11px}
-  #ovctl #ovcopy{background:#2b6bff;border:none;color:#fff;font-weight:700;border-radius:7px;
-    padding:6px 11px;cursor:pointer;font-size:12px}
-  #ovctl #ovcopy:hover{filter:brightness(1.1)}
-  #ovctl #ovcopied{color:#57e0a6;margin-top:6px;min-height:14px;font-size:11.5px}
+  /* Background, border & scale are driven live from the admin Overlay Sliders
+     popup (pushed over the socket) — no on-page controls here. */
 </style>
 </head>
 <body>
@@ -113,95 +102,38 @@
   const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 12, 40));
   const SIDE = params.get('side') === 'right' ? 'right' : 'left';
   const TITLE = params.get('title');
-  const SCALE = Math.max(0.5, Math.min(Number(params.get('scale')) || 1, 3));
-
   const wrap = document.getElementById('wrap');
   wrap.className = SIDE;
-  wrap.style.transform = `scale(${SCALE})`;
 
-  // ── Background transparency ──
-  // By default the overlay FOLLOWS the live setting from the admin panel (pushed
-  // over the socket), so it can be changed as often as you like mid-stream with
-  // nothing to touch in OBS. A ?opacity=0..1 URL param pins this source instead
-  // (useful if you want two overlays at different levels).
   const clamp01 = (n) => Math.max(0, Math.min(1, n));
-  const urlOpacityRaw = params.get('opacity');
-  const urlForced = urlOpacityRaw !== null && urlOpacityRaw !== '';
-  let localForced = false; // set true if the on-page slider (?controls=1) is used
-  function applyOpacity(a){
-    document.documentElement.style.setProperty('--bg-alpha', a);
-    const panel = document.getElementById('panel');
-    if(panel) panel.style.backdropFilter = a > 0.02 ? 'blur(6px)' : 'none';
-  }
-  let opacity = 0;
-  if(urlForced) opacity = clamp01(Number(urlOpacityRaw) || 0);
-  else if(params.get('bg') === '0') opacity = 0;
-  else if(params.get('bg') === '1') opacity = 0.85;
-  applyOpacity(opacity);
+  const clampScale = (n) => Math.max(0.5, Math.min(3, n));
 
-  // The clean URL to paste into OBS, with the chosen opacity baked in (and the
-  // controls flag stripped so the slider never shows on-stream).
-  function obsUrl(a){
-    const u = new URL(location.href);
-    u.searchParams.delete('controls');
-    u.searchParams.set('opacity', a.toFixed(2));
-    return u.toString();
+  // Background, border and scale are driven LIVE from the admin panel (pushed
+  // over the socket) — nothing to touch in OBS. `panel` toggles the background
+  // AND the off-white border together; text is never affected.
+  function applySettings(s){
+    s = s || {};
+    const panel = s.panel !== false;
+    const op = clamp01(Number(s.opacity) || 0);
+    const scale = clampScale(Number(s.scale) || 1);
+    document.documentElement.style.setProperty('--bg-alpha', panel ? op : 0);
+    const p = document.getElementById('panel');
+    if(p){
+      p.style.border = panel ? '' : 'none';        // '' reverts to the CSS off-white frame
+      p.style.boxShadow = panel ? '' : 'none';
+      p.style.backdropFilter = (panel && op > 0.02) ? 'blur(6px)' : 'none';
+    }
+    wrap.style.transform = `scale(${scale})`;
   }
-
-  // The background level is normally driven live from the admin panel, so the
-  // overlay shows NO on-page slider by default (keeps it clean and OBS-safe).
-  // ?controls=1 opts into a local per-source slider that overrides the live value.
-  function controlsWanted(){ return params.get('controls') === '1'; }
-  function buildControls(){
-    if(document.getElementById('ovctl')) return;
-    const bar = document.createElement('div');
-    bar.id = 'ovctl';
-    bar.innerHTML =
-      '<div class="ovrow"><b>Overlay background</b><span id="ovpct"></span></div>'
-      + '<input id="ovrange" type="range" min="0" max="100" step="1" />'
-      + '<div class="ovhint">Drag for how much backing you want behind the queue, then copy the link into your OBS Browser Source:</div>'
-      + '<div class="ovurl"><input id="ovurl" readonly /><button id="ovcopy">Copy</button></div>'
-      + '<div id="ovcopied"></div>';
-    document.body.appendChild(bar);
-    const range = bar.querySelector('#ovrange');
-    const pct = bar.querySelector('#ovpct');
-    const url = bar.querySelector('#ovurl');
-    const copied = bar.querySelector('#ovcopied');
-    range.value = Math.round(opacity * 100);
-    const refresh = () => {
-      const a = clamp01(Number(range.value) / 100);
-      localForced = true; // local slider now overrides the live admin value
-      opacity = a;
-      applyOpacity(a);
-      pct.textContent = range.value + '%';
-      url.value = obsUrl(a);
-      copied.textContent = '';
-    };
-    range.addEventListener('input', refresh);
-    bar.querySelector('#ovcopy').addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(url.value); copied.textContent = '✓ Copied — paste into OBS.'; }
-      catch(e){ url.select(); copied.textContent = 'Select the link above and copy it.'; }
-    });
-    refresh();
-  }
-  if(controlsWanted()) buildControls();
+  applySettings(null);
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
   const socket = io('/overlay');
-  let state = { live:false, queue:[], event:null, stats:{} };
+  let state = { live:false, queue:[], event:null, stats:{}, overlays:{} };
   socket.on('state', (s)=>{
     state = s;
-    // Follow the live admin setting unless this source is pinned by URL or the
-    // local slider is in use.
-    if(!urlForced && !localForced && typeof s.overlayOpacity === 'number'){
-      opacity = clamp01(s.overlayOpacity);
-      applyOpacity(opacity);
-      const r = document.getElementById('ovrange');
-      const p = document.getElementById('ovpct');
-      if(r) r.value = Math.round(opacity * 100);
-      if(p) p.textContent = Math.round(opacity * 100) + '%';
-    }
+    applySettings(s.overlays && s.overlays.queue);
     render();
   });
 

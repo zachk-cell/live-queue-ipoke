@@ -21,7 +21,7 @@ const STATE_FILE = path.join(DATA_DIR, 'queue-state.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events-state.json'); // iPoke: event entries (side-queues)
-const MAX_HISTORY = 5; // keep the last N streams for the admin history view
+const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
 
 // Order-combining modes (how a buyer's repeat orders are grouped into one slot):
 //   'always'   — legacy PBCC/Poke Pig behaviour: every repeat order from an
@@ -90,9 +90,16 @@ export class QueueEngine extends EventEmitter {
     this.trackerTitle = process.env.TRACKER_TITLE || '🐷 Piggy Bank Tracker';
     this.trackerSubtitle = process.env.TRACKER_SUBTITLE || 'Persists Across Streams Until Hit';
 
-    // Live overlay background opacity (0 = transparent .. 1 = solid), controlled
-    // from the admin panel and pushed to the OBS overlay in real time.
-    this.overlayOpacity = 0;
+    // Live per-overlay display settings, controlled from the admin panel and
+    // pushed to the OBS overlays in real time. Two overlays: the main queue and
+    // the Vault (pack-count) board. opacity 0..1 (background), scale 0.5..3,
+    // panel = show background + border (single toggle).
+    this.overlays = {
+      queue: { opacity: 0, scale: 1, panel: true },
+      vault: { opacity: 0, scale: 1, panel: true },
+    };
+    // Pacific-day marker for the daily "Past Days" rollover.
+    this.lastRolloverDay = null;
 
     this._ensureDataDir();
     this._load();
@@ -131,7 +138,14 @@ export class QueueEngine extends EventEmitter {
         if (Array.isArray(cfg.events)) this.events = cfg.events;
         this.eventCounter = cfg.eventCounter || 0;
         this.activeEventId = cfg.activeEventId || null;
-        if (Number.isFinite(cfg.overlayOpacity)) this.overlayOpacity = Math.max(0, Math.min(1, cfg.overlayOpacity));
+        if (cfg.overlays && typeof cfg.overlays === 'object') {
+          for (const k of ['queue', 'vault']) {
+            if (cfg.overlays[k]) Object.assign(this.overlays[k], cfg.overlays[k]);
+          }
+        } else if (Number.isFinite(cfg.overlayOpacity)) {
+          this.overlays.queue.opacity = Math.max(0, Math.min(1, cfg.overlayOpacity)); // migrate old single value
+        }
+        if (cfg.lastRolloverDay) this.lastRolloverDay = cfg.lastRolloverDay;
       }
     } catch (e) {
       console.warn('[queue] could not load config:', e.message);
@@ -228,7 +242,7 @@ export class QueueEngine extends EventEmitter {
       }
       const envOp = Number(process.env.OVERLAY_OPACITY);
       if (Number.isFinite(envOp) && !this._combineLoadedFromDisk) {
-        this.overlayOpacity = Math.max(0, Math.min(1, envOp));
+        this.overlays.queue.opacity = Math.max(0, Math.min(1, envOp));
       }
     } catch (e) { console.warn('[queue] COMBINE_MODE seed failed:', e.message); }
     // Recompute priority flags in case the env extras changed matching, then save.
@@ -315,10 +329,19 @@ export class QueueEngine extends EventEmitter {
     if (this.variantLog.length > 200) this.variantLog.length = 200;
   }
 
+  /** Atomic write: write to a temp file then rename over the target, so a crash
+   *  or redeploy mid-write can never leave a half-written (corrupt) state file.
+   *  Critical for a perpetual queue that persists constantly. */
+  _atomicWrite(file, data) {
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, file);
+  }
+
   _persist() {
     try {
-      fs.writeFileSync(STATE_FILE, JSON.stringify([...this.orders.values()]));
-      fs.writeFileSync(
+      this._atomicWrite(STATE_FILE, JSON.stringify([...this.orders.values()]));
+      this._atomicWrite(
         CONFIG_FILE,
         JSON.stringify({
           priorityItems: this.priorityItems,
@@ -336,13 +359,14 @@ export class QueueEngine extends EventEmitter {
           events: this.events,
           eventCounter: this.eventCounter,
           activeEventId: this.activeEventId,
-          overlayOpacity: this.overlayOpacity,
+          overlays: this.overlays,
+          lastRolloverDay: this.lastRolloverDay,
         })
       );
       // Only write the events-state file when there are (or were) events, so
       // stores that never use events don't get an extra file.
       if (this.eventEntries.size || fs.existsSync(EVENTS_FILE)) {
-        fs.writeFileSync(EVENTS_FILE, JSON.stringify([...this.eventEntries.values()]));
+        this._atomicWrite(EVENTS_FILE, JSON.stringify([...this.eventEntries.values()]));
       }
     } catch (e) {
       console.warn('[queue] persist failed:', e.message);
@@ -351,7 +375,7 @@ export class QueueEngine extends EventEmitter {
 
   _persistHistory() {
     try {
-      fs.writeFileSync(HISTORY_FILE, JSON.stringify(this.history));
+      this._atomicWrite(HISTORY_FILE, JSON.stringify(this.history));
     } catch (e) {
       console.warn('[queue] history persist failed:', e.message);
     }
@@ -853,6 +877,7 @@ export class QueueEngine extends EventEmitter {
       variantLog: this.variantLog.slice(0, 50),
       history: this.history.map((s) => ({
         id: s.id,
+        label: s.label || null,
         startedAt: s.startedAt,
         endedAt: s.endedAt,
         count: s.count,
@@ -863,7 +888,7 @@ export class QueueEngine extends EventEmitter {
       tracker: { title: this.trackerTitle, subtitle: this.trackerSubtitle },
       // ── iPoke additions (empty/default for the other stores) ──
       perpetual: this.perpetual,
-      overlayOpacity: this.overlayOpacity,
+      overlays: this.overlays,
       combine: {
         mode: this.combineMode,
         windowMs: this.combineWindowMs,
@@ -1040,15 +1065,65 @@ export class QueueEngine extends EventEmitter {
 
   clearNameOverride(buyerId) { return this.setNameOverride(buyerId, ''); }
 
-  /** Live overlay background opacity (0..1), controlled from the admin panel and
-   *  pushed to the OBS overlay in real time. Text/items are never affected. */
-  setOverlayOpacity(a) {
-    const v = Math.max(0, Math.min(1, Number(a)));
-    if (!Number.isFinite(v)) return false;
-    this.overlayOpacity = v;
+  /** Live per-overlay display setting (which = 'queue' | 'vault'), controlled
+   *  from the admin panel and pushed to the OBS overlays in real time. Accepts
+   *  any of { opacity 0..1, scale 0.5..3, panel bool }. Text is never affected. */
+  setOverlaySetting(which, patch) {
+    const s = this.overlays[which];
+    if (!s || !patch || typeof patch !== 'object') return false;
+    if (patch.opacity != null && Number.isFinite(Number(patch.opacity))) s.opacity = Math.max(0, Math.min(1, Number(patch.opacity)));
+    if (patch.scale != null && Number.isFinite(Number(patch.scale))) s.scale = Math.max(0.5, Math.min(3, Number(patch.scale)));
+    if (patch.panel != null) s.panel = !!patch.panel;
     this._persist();
-    this.emit('change', { reason: 'overlay-opacity', overlayOpacity: v });
+    this.emit('change', { reason: 'overlay-setting', which });
     return true;
+  }
+
+  // ── Daily "Past Days" rollover (perpetual queue) ──────────────────────────
+  _laDateString(ts) {
+    return new Date(ts || Date.now()).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' });
+  }
+  _prettyDay(mdY) {
+    const d = new Date(String(mdY) + ' 12:00:00');
+    if (isNaN(d.getTime())) return String(mdY);
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  /** Called on boot and every minute. When the Pacific calendar day changes,
+   *  archive the finished day's fulfilled + cancelled orders into Past Days and
+   *  clear them, LEAVING any still-queued (unfulfilled) orders on the board. */
+  maybeDailyRollover() {
+    const today = this._laDateString();
+    if (!this.lastRolloverDay) { this.lastRolloverDay = today; this._persist(); return false; }
+    if (today === this.lastRolloverDay) return false;
+    this._rolloverDay(this._prettyDay(this.lastRolloverDay));
+    this.lastRolloverDay = today;
+    this._persist();
+    return true;
+  }
+  _rolloverDay(label) {
+    const fulfilled = this.fulfilledRecords();
+    const cancelled = this.cancelledRecords();
+    if (fulfilled.length || cancelled.length) {
+      this.history.unshift({
+        id: String(Date.now()),
+        label,
+        startedAt: null,
+        endedAt: Date.now(),
+        count: fulfilled.length,
+        value: fulfilled.reduce((s, r) => s + Number(r.total || 0), 0),
+        unfulfilledCount: 0,
+        fulfilled, cancelled, unfulfilled: [],
+      });
+      this.history = this.history.slice(0, MAX_HISTORY);
+      this._persistHistory();
+    }
+    // Remove the archived (fulfilled + cancelled) orders; keep queued ones.
+    for (const [id, o] of this.orders) {
+      if (o.status === 'fulfilled' || o.status === 'cancelled') this.orders.delete(id);
+    }
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'day-rollover', label });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1075,15 +1150,30 @@ export class QueueEngine extends EventEmitter {
     return [...new Set((arr || []).map((s) => String(s).trim().toLowerCase()).filter(Boolean))];
   }
 
+  /** Spots currently ordered (queued) for one event. */
+  _eventSpotsOrdered(eventId) {
+    let n = 0;
+    for (const e of this.eventEntries.values()) {
+      if (e.eventId === eventId && e.status === 'queued') n += (Number(e.spots) || 0);
+    }
+    return n;
+  }
+
   /** First OPEN event whose keyword appears in the line item's name/sku/variant.
-   *  Case-insensitive substring. Ripped/closed events never capture new spots. */
+   *  Case-insensitive substring. Ripped/closed events never capture new spots,
+   *  and a SOLD-OUT event (spots ordered ≥ its limit) stops capturing too — the
+   *  item then falls through to the main queue rather than overselling. */
   _matchEvent(item) {
     if (!this.events.length) return null;
     const text = `${item.name || ''} ${item.sku || ''} ${item.variant || ''}`.toLowerCase();
     for (const ev of this.events) {
       if (ev.status && ev.status !== 'open') continue;
       for (const kw of (ev.keywords || [])) {
-        if (kw && text.includes(kw)) return ev;
+        if (kw && text.includes(kw)) {
+          // Enforce the spot limit: once full, don't capture more into it.
+          if (ev.totalSpots > 0 && this._eventSpotsOrdered(ev.id) >= ev.totalSpots) break;
+          return ev;
+        }
       }
     }
     return null;

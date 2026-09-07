@@ -27,7 +27,7 @@
   .stat{text-align:center;min-width:64px}
   .stat b{display:block;font-size:20px;line-height:1.1}
   .stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
-  main{max-width:920px;margin:0 auto;padding:18px 16px 80px}
+  main{max-width:1180px;margin:0 auto;padding:18px 22px 80px}
   .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:nowrap}
   .toolbar input{flex:1;min-width:140px;background:var(--panel2);border:1px solid var(--line);
     color:var(--text);padding:9px 12px;border-radius:9px;font-size:13px}
@@ -107,6 +107,15 @@
   .card textarea{width:100%;height:110px;background:var(--panel2);border:1px solid var(--line);color:var(--text);
     border-radius:9px;padding:10px;font-size:13px;font-family:inherit;resize:vertical}
   .row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+  .ov-sec{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:12px}
+  .ov-sec-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:14px}
+  .ov-sec-h .ov-open{color:var(--accent);font-size:12px;text-decoration:none;font-weight:700}
+  .ov-sec label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
+  .ov-sec label:first-of-type{margin-top:0}
+  .ov-sec .ov-val{color:var(--pri);font-weight:800;float:right;font-variant-numeric:tabular-nums}
+  .ov-sec input[type=range]{width:100%;accent-color:var(--accent);margin:2px 0 2px}
+  .ov-sec .ov-check{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--text);font-size:13px;cursor:pointer}
+  .ov-sec .ov-check input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .chip{background:var(--pri-bg);color:var(--pri);border:1px solid var(--pri);border-radius:20px;padding:3px 10px;font-size:12px}
   .livebadge{font-size:10px;font-weight:800;letter-spacing:.6px;padding:3px 8px;border-radius:20px;
@@ -132,7 +141,7 @@
   /* Anchor the card just to the LEFT of the centered queue column (main is
      max-width 920, so its left edge sits at 50% - 460px). This keeps it beside
      the content instead of jammed against the browser's left edge. */
-  #variants-admin{position:fixed;right:calc(50% + 484px);top:150px;width:266px;max-height:calc(100vh - 170px);
+  #variants-admin{position:fixed;right:calc(50% + 614px);top:150px;width:266px;max-height:calc(100vh - 170px);
     overflow:auto;z-index:4}
   @media (max-width:1499px){#variants-admin{position:static;width:auto;max-height:none;margin:6px 0 14px}}
   .vcard{background:#171a21;border:1px solid #272c38;border-radius:12px;padding:12px 14px}
@@ -229,6 +238,7 @@
 <header>
   <h1><span id="dot" class="dot"></span>iPoke Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span id="ttStatus" class="ttbadge" style="display:none"></span></h1>
   <a href="/guide" target="_blank" class="hdr-link">📖 Guide ↗</a>
+  <a id="ovBtn" href="javascript:void(0)" class="hdr-link" style="display:none" title="Scale, transparency & background for both OBS overlays — changes apply instantly." onclick="openOverlaySliders()">🎚 Overlay Sliders</a>
   <a href="{{ADMIN}}/logout" class="hdr-link hdr-logout">Log out</a>
   <div class="stats">
     <div class="stat"><b id="s-active">0</b><span>In queue</span></div>
@@ -246,13 +256,10 @@
     <input id="search" placeholder="Filter by buyer…" oninput="render()" />
     <button class="ghost" onclick="openPriority()">⭐ Priority items</button>
     <button class="ghost" onclick="resetQueue()">Reset</button>
-    <a href="{{ADMIN}}/history" style="text-decoration:none"><button class="ghost">🗂 Past streams ↗</button></a>
+    <a href="{{ADMIN}}/history" style="text-decoration:none"><button class="ghost">🗂 Past Days ↗</button></a>
     <a href="/" target="_blank" style="text-decoration:none"><button class="ghost">Public view ↗</button></a>
     <button id="combinePill" class="combine-pill" style="display:none" onclick="openCombine()">⇄ Combining: <span class="cm" id="cm-label">…</span></button>
     <a href="/overlay" target="_blank" id="overlayLink" style="text-decoration:none;display:none"><button class="ghost">📺 Overlay ↗</button></a>
-    <span id="ovopWrap" class="combine-pill" style="display:none;gap:9px" title="Live overlay background — changes the OBS overlay instantly. Text always stays solid.">📺 Overlay BG
-      <input id="ovopRange" type="range" min="0" max="100" step="1" style="width:110px;accent-color:var(--accent);vertical-align:middle" />
-      <span class="cm" id="ovopPct">0%</span></span>
   </div>
 
   <div class="chips" id="pri-chips"></div>
@@ -301,6 +308,36 @@
     <div class="row">
       <button class="ghost" onclick="closePriority()">Cancel</button>
       <button class="primary" onclick="savePriority()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- iPoke: Overlay Sliders popup (Overlay 1 = Queue, Overlay 2 = Vault) -->
+<div class="modal" id="ovModal">
+  <div class="card" style="max-width:420px">
+    <h3>🎚 Overlay Sliders</h3>
+    <p style="margin-bottom:14px">Scale, background transparency, and background/border for each OBS overlay. Changes apply <b>instantly</b> — the text always stays solid and readable.</p>
+
+    <div class="ov-sec">
+      <div class="ov-sec-h"><b>Overlay 1 — Queue</b> <a href="/overlay" target="_blank" class="ov-open">open ↗</a></div>
+      <label>Scale <span id="ov-queue-scaleVal" class="ov-val">100%</span></label>
+      <input id="ov-queue-scale" type="range" min="50" max="200" step="1" value="100" />
+      <label>Background transparency <span id="ov-queue-opVal" class="ov-val">0%</span></label>
+      <input id="ov-queue-op" type="range" min="0" max="100" step="1" value="0" />
+      <label class="ov-check"><input id="ov-queue-panel" type="checkbox" checked /> Show background &amp; border</label>
+    </div>
+
+    <div class="ov-sec">
+      <div class="ov-sec-h"><b>Overlay 2 — Vault</b> <a href="/overlay/vault" target="_blank" class="ov-open">open ↗</a></div>
+      <label>Scale <span id="ov-vault-scaleVal" class="ov-val">100%</span></label>
+      <input id="ov-vault-scale" type="range" min="50" max="200" step="1" value="100" />
+      <label>Background transparency <span id="ov-vault-opVal" class="ov-val">0%</span></label>
+      <input id="ov-vault-op" type="range" min="0" max="100" step="1" value="0" />
+      <label class="ov-check"><input id="ov-vault-panel" type="checkbox" checked /> Show background &amp; border</label>
+    </div>
+
+    <div class="row">
+      <button class="primary" onclick="closeOverlaySliders()">Done</button>
     </div>
   </div>
 </div>
@@ -508,14 +545,14 @@
     const live = (state.stats||{}).live;
     if(!live){
       if(!(await uiConfirm({title:'Start a new live?',
-        body:'This starts a fresh stream and begins accepting new orders. Anything left from a previous stream that wasn\'t ended is archived to Past streams first.',
+        body:'This starts a fresh stream and begins accepting new orders. Anything left from a previous stream that wasn\'t ended is archived to Past Days first.',
         confirmText:'Go live', danger:false}))) return;
       await post('/api/live/on');
     } else {
       const n = (state.stats||{}).activeCount||0;
       const body = n>0
-        ? `You still have ${n} order${n===1?'':'s'} in the queue that ${n===1?"hasn't":"haven't"} been fulfilled. Ending will archive EVERYTHING (fulfilled, cancelled, and those ${n} unfulfilled) to Past streams and clear the board. New orders stop entering.`
-        : 'This archives this stream (fulfilled + cancelled) to Past streams and clears the board. New orders stop entering. You can review or export it anytime from Past streams.';
+        ? `You still have ${n} order${n===1?'':'s'} in the queue that ${n===1?"hasn't":"haven't"} been fulfilled. Ending will archive EVERYTHING (fulfilled, cancelled, and those ${n} unfulfilled) to Past Days and clear the board. New orders stop entering.`
+        : 'This archives this stream (fulfilled + cancelled) to Past Days and clears the board. New orders stop entering. You can review or export it anytime from Past Days.';
       if(!(await uiConfirm({title:'End the live?', body, confirmText:'End live', danger:true}))) return;
       await post('/api/live/off');
     }
@@ -810,14 +847,8 @@
     document.getElementById('combinePill').style.display = 'none';
     document.getElementById('overlayLink').style.display = perp ? '' : 'none';
     document.getElementById('events-admin').style.display = perp ? '' : 'none';
-    const ovw = document.getElementById('ovopWrap');
-    ovw.style.display = perp ? 'inline-flex' : 'none';
-    if(perp){
-      const r = document.getElementById('ovopRange');
-      const op = Math.round((state.overlayOpacity != null ? state.overlayOpacity : 0) * 100);
-      // don't fight the operator while they're dragging it
-      if(document.activeElement !== r){ r.value = op; document.getElementById('ovopPct').textContent = op + '%'; }
-    }
+    document.getElementById('ovBtn').style.display = perp ? '' : 'none';
+    if(perp) syncOverlaySliders(state.overlays);
 
     document.getElementById('s-active').textContent = st.activeCount||0;
     document.getElementById('s-pri').textContent = st.priorityCount||0;
@@ -942,9 +973,9 @@
   async function toggleEventActive(id, on){ await postJSON('/api/events/'+encodeURIComponent(id)+'/active',{active:on}); }
   async function ripEventUI(id){
     const ev=(state.events||[]).find(e=>e.id===id);
-    const ok = await uiConfirm({title:'Rip "'+((ev&&ev.title)||'event')+'"?',
+    const ok = await uiConfirm({title:'Mark "'+((ev&&ev.title)||'event')+'" fulfilled?',
       body:'This marks every spot in this event fulfilled and closes it (it stops taking new orders). Use it once the event has been ripped on stream.',
-      confirmText:'Rip event', danger:false});
+      confirmText:'Event Fulfilled', danger:false});
     if(ok) await postJSON('/api/events/'+encodeURIComponent(id)+'/rip');
   }
   async function removeEventUI(id){
@@ -996,7 +1027,7 @@
           ${ripped?'<span class="estat">(ripped)</span>':''}
           <div class="ebtns">
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
-            <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>Rip</button>
+            <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
             <button class="eedit" onclick="editEvent('${e.id}')">Edit</button>
             <button class="edel" onclick="removeEventUI('${e.id}')">Delete</button>
           </div>
@@ -1064,17 +1095,59 @@
     clearCombineSel();
   }
 
-  // ── Live overlay-background slider (pushes to the OBS overlay in real time) ──
+  // ── Overlay Sliders popup (Overlay 1 = Queue, Overlay 2 = Vault) ──
+  // Each overlay gets a scale slider, a transparency slider, and a checkbox that
+  // toggles BOTH the background and the off-white border together. Changes push
+  // to the OBS overlays in real time via /api/overlay-setting.
+  const OV_KEYS = ['queue','vault'];
+  const _ovSend = {}; // per-overlay debounce timers
+
+  function openOverlaySliders(){
+    document.getElementById('ovModal').classList.add('open');
+    syncOverlaySliders(state.overlays);
+  }
+  function closeOverlaySliders(){ document.getElementById('ovModal').classList.remove('open'); }
+
+  // Reflect server state into the popup controls (without fighting a dragging operator).
+  function syncOverlaySliders(overlays){
+    overlays = overlays || {};
+    for(const k of OV_KEYS){
+      const s = overlays[k] || {};
+      const scale = s.scale != null ? Number(s.scale) : 1;
+      const op = Math.round((s.opacity != null ? Number(s.opacity) : 0) * 100);
+      const panel = s.panel !== false;
+      const sc = document.getElementById('ov-'+k+'-scale');
+      const tr = document.getElementById('ov-'+k+'-op');
+      const cb = document.getElementById('ov-'+k+'-panel');
+      if(sc && document.activeElement !== sc){ sc.value = Math.round(scale*100); document.getElementById('ov-'+k+'-scaleVal').textContent = Math.round(scale*100)+'%'; }
+      if(tr && document.activeElement !== tr){ tr.value = op; document.getElementById('ov-'+k+'-opVal').textContent = op+'%'; }
+      if(cb){ cb.checked = panel; }
+    }
+  }
+
+  // Debounced push of one overlay's current control values to the server.
+  function pushOverlay(k){
+    const scale = Number(document.getElementById('ov-'+k+'-scale').value)/100;
+    const opacity = Number(document.getElementById('ov-'+k+'-op').value)/100;
+    const panel = document.getElementById('ov-'+k+'-panel').checked;
+    clearTimeout(_ovSend[k]);
+    _ovSend[k] = setTimeout(() => {
+      postJSON('/api/overlay-setting', { which: k, scale, opacity, panel });
+    }, 90);
+  }
+
   (function(){
-    const r = document.getElementById('ovopRange');
-    if(!r) return;
-    let t = null;
-    r.addEventListener('input', () => {
-      const v = Number(r.value);
-      document.getElementById('ovopPct').textContent = v + '%';
-      clearTimeout(t);
-      t = setTimeout(() => { postJSON('/api/overlay-opacity', { opacity: v / 100 }); }, 100);
-    });
+    for(const k of OV_KEYS){
+      const sc = document.getElementById('ov-'+k+'-scale');
+      const tr = document.getElementById('ov-'+k+'-op');
+      const cb = document.getElementById('ov-'+k+'-panel');
+      if(!sc) continue;
+      sc.addEventListener('input', () => { document.getElementById('ov-'+k+'-scaleVal').textContent = sc.value+'%'; pushOverlay(k); });
+      tr.addEventListener('input', () => { document.getElementById('ov-'+k+'-opVal').textContent = tr.value+'%'; pushOverlay(k); });
+      cb.addEventListener('change', () => pushOverlay(k));
+    }
+    const modal = document.getElementById('ovModal');
+    if(modal) modal.addEventListener('click', (e)=>{ if(e.target === modal) closeOverlaySliders(); });
   })();
 
   // --- TikTok connection status ---

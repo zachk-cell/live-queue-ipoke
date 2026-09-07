@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>iPoke Vault — Overlay</title>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  /* OBS browser source for the VAULT pack counts. Background is transparent so
+     it composites over video. Everything (background, border, scale) is driven
+     LIVE from the admin panel's Overlay Sliders popup (Overlay 2 = Vault).
+     Query params:
+       ?title=...  override the vault title
+       ?side=right panel side: left or right (default right)
+       ?rows=N     max rows to show (default 20) */
+  :root{
+    /* Background opacity of the whole panel. 0 = fully transparent (default);
+       raised by the admin Vault slider. */
+    --bg-alpha:0;
+    --card:rgba(22,10,10, calc(var(--bg-alpha) * 0.9));
+    --line:rgba(255,255,255, calc(var(--bg-alpha) * 0.12));
+    /* Vault text is RED. Solid dark outline keeps it readable over ANY
+       background (dark video, bright video, or a plain white page),
+       independent of the panel opacity. */
+    --red:#ff3b3b; --red-soft:#ff6a6a; --red-deep:#ff2020;
+    --txt-outline:
+      -1px -1px 0 rgba(0,0,0,.92), 1px -1px 0 rgba(0,0,0,.92),
+      -1px 1px 0 rgba(0,0,0,.92), 1px 1px 0 rgba(0,0,0,.92),
+      0 2px 6px rgba(0,0,0,.8);
+  }
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--red)}
+  #wrap{position:fixed;top:18px;bottom:18px;width:400px;display:flex;flex-direction:column;
+    transform-origin:top right}
+  #wrap.left{left:18px;transform-origin:top left} #wrap.right{right:18px;left:auto}
+  /* Thin off-white rounded frame — ALWAYS visible (independent of --bg-alpha) so
+     the overlay's edge is easy to distinguish on screen even at 0% background.
+     Toggled off (with the background) by the admin bg/border checkbox. */
+  .panel{background:var(--card);border:1.5px solid rgba(240,238,230,.55);border-radius:16px;
+    box-shadow:0 0 0 1px rgba(0,0,0,.30), 0 8px 26px rgba(0,0,0, calc(0.12 + var(--bg-alpha) * 0.4));
+    display:flex;flex-direction:column;overflow:hidden;max-height:100%}
+  .head{padding:14px 18px 12px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid var(--line)}
+  .vault-ico{font-size:18px;flex:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.7))}
+  .title{font-size:19px;font-weight:800;letter-spacing:.3px;color:var(--red);text-shadow:var(--txt-outline)}
+  .sub{padding:4px 18px 0;font-size:12.5px;color:var(--red-soft);line-height:1.4;text-shadow:var(--txt-outline)}
+  .count{margin-left:auto;font-size:14px;font-weight:800;color:var(--red-soft);text-shadow:var(--txt-outline)}
+  .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
+  .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
+    background:rgba(255,255,255, calc(var(--bg-alpha) * 0.05))}
+  /* Label + count always stay fully opaque and bold, with strong shadows so they
+     read clearly over any video even when the background is fully transparent.
+     Only background colors follow --bg-alpha. */
+  .nm{flex:1;min-width:0;font-weight:800;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+    color:var(--red);text-shadow:var(--txt-outline)}
+  .num{font-variant-numeric:tabular-nums;font-weight:900;font-size:22px;min-width:40px;text-align:right;
+    color:var(--red-deep);text-shadow:var(--txt-outline)}
+  .empty{padding:26px 18px;text-align:center;color:var(--red-soft);font-size:15px;text-shadow:var(--txt-outline)}
+  .more{padding:6px 12px 2px;font-size:13px;color:var(--red-soft);font-weight:700;text-shadow:var(--txt-outline)}
+</style>
+</head>
+<body>
+<div id="wrap" class="right">
+  <div class="panel" id="panel">
+    <div class="head">
+      <span class="vault-ico">🔴</span>
+      <span class="title" id="title">Vault</span>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="sub" id="sub"></div>
+    <div class="list" id="list"></div>
+    <div class="more" id="more"></div>
+  </div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 20, 60));
+  const SIDE = params.get('side') === 'left' ? 'left' : 'right';
+  const TITLE = params.get('title');
+  const wrap = document.getElementById('wrap');
+  wrap.className = SIDE;
+
+  const clamp01 = (n) => Math.max(0, Math.min(1, n));
+  const clampScale = (n) => Math.max(0.5, Math.min(3, n));
+
+  // Background, border and scale are driven LIVE from the admin panel (Overlay
+  // 2 = Vault), pushed over the socket. `panel` toggles the background AND the
+  // off-white border together; the red text is never affected.
+  function applySettings(s){
+    s = s || {};
+    const panel = s.panel !== false;
+    const op = clamp01(Number(s.opacity) || 0);
+    const scale = clampScale(Number(s.scale) || 1);
+    document.documentElement.style.setProperty('--bg-alpha', panel ? op : 0);
+    const p = document.getElementById('panel');
+    if(p){
+      p.style.border = panel ? '' : 'none';        // '' reverts to the CSS off-white frame
+      p.style.boxShadow = panel ? '' : 'none';
+      p.style.backdropFilter = (panel && op > 0.02) ? 'blur(6px)' : 'none';
+    }
+    wrap.style.transform = `scale(${scale})`;
+  }
+  applySettings(null);
+
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+  const socket = io('/overlay');
+  let state = { variants:[], tracker:{}, overlays:{} };
+  socket.on('state', (s)=>{
+    state = s;
+    applySettings(s.overlays && s.overlays.vault);
+    render();
+  });
+
+  function render(){
+    const list = document.getElementById('list');
+    const moreEl = document.getElementById('more');
+    const titleEl = document.getElementById('title');
+    const subEl = document.getElementById('sub');
+    const countEl = document.getElementById('count');
+
+    const tracker = state.tracker || {};
+    titleEl.textContent = TITLE || tracker.title || 'Vault';
+    subEl.textContent = tracker.subtitle || '';
+    subEl.style.display = subEl.textContent ? '' : 'none';
+
+    const variants = (state.variants || []);
+    const total = variants.reduce((a,v)=>a + (Number(v.count)||0), 0);
+    countEl.textContent = total ? (total + (total===1?' pack':' packs')) : '';
+
+    const rows = variants.slice(0, ROWS);
+    list.innerHTML = rows.length ? rows.map((v)=>`
+      <div class="row">
+        <span class="nm">${esc(v.label)}</span>
+        <span class="num">${Number(v.count)||0}</span>
+      </div>`).join('') : '<div class="empty">No Vault sets tracked yet.</div>';
+    moreEl.textContent = variants.length>rows.length ? `+${variants.length-rows.length} more` : '';
+  }
+  render();
+</script>
+</body>
+</html>

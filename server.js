@@ -170,7 +170,12 @@ function overlayView() {
   return {
     live,
     perpetual: !!snap.perpetual,
-    overlayOpacity: snap.overlayOpacity,
+    // Per-overlay live display settings (scale / opacity / panel) for both the
+    // queue and vault overlays.
+    overlays: snap.overlays,
+    // Vault (tracked-variant) counts + labels, for the vault overlay.
+    variants: (snap.variants || []).map((v) => ({ id: v.id, label: v.label, count: v.count })),
+    tracker: snap.tracker,
     activeEventId: snap.activeEventId || null,
     event: active ? {
       id: active.id,
@@ -220,6 +225,8 @@ app.get('/api/public-state', (_req, res) => res.json(publicView()));
 // Add it in OBS as a Browser Source pointing at /overlay. Transparent bg so it
 // composites over the stream. Shows the live queue + the active event side-queue.
 app.get('/overlay', (_req, res) => res.sendFile(path.join(__dirname, 'overlay.html')));
+// Second overlay: the Vault pack-count board (add as its own OBS browser source).
+app.get('/overlay/vault', (_req, res) => res.sendFile(path.join(__dirname, 'vault-overlay.html')));
 app.get('/api/overlay-state', (_req, res) => res.json(overlayView()));
 
 // ---------- Operator guide (simple password, no MFA) ----------
@@ -357,10 +364,12 @@ app.post('/api/prep/:key', requireAuth, (req, res) => {
   res.json({ ok: queue.setPrepped(req.params.key, on) });
 });
 
-// Live overlay background opacity (0..1) — changes the OBS overlay in real time.
-app.post('/api/overlay-opacity', requireAuth, (req, res) => {
-  const ok = queue.setOverlayOpacity(req.body && req.body.opacity);
-  res.json({ ok, overlayOpacity: queue.overlayOpacity });
+// Live per-overlay display settings — changes the OBS overlays in real time.
+// Body: { which:'queue'|'vault', opacity?:0..1, scale?:0.5..3, panel?:bool }.
+app.post('/api/overlay-setting', requireAuth, (req, res) => {
+  const which = req.body && req.body.which;
+  const ok = queue.setOverlaySetting(which, req.body || {});
+  res.json({ ok, overlays: queue.overlays });
 });
 
 // Shopify status + raw-order probe (admin only) — for connecting the store.
@@ -605,6 +614,14 @@ if (tiktokEnabled()) {
 // Shopify order ingest (iPoke). Perpetual: polls 24/7; otherwise only while live.
 if (shopifyEnabled()) {
   startShopifyPolling(queue);
+}
+// iPoke perpetual: roll fulfilled orders into "Past Days" at Pacific midnight.
+// Runs a catch-up check on boot (covers a redeploy across midnight), then every
+// minute. Unfulfilled orders stay on the board.
+if (queue.perpetual) {
+  queue.maybeDailyRollover();
+  const rolloverTimer = setInterval(() => queue.maybeDailyRollover(), 60 * 1000);
+  rolloverTimer.unref?.();
 }
 
 server.listen(PORT, () => {

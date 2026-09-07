@@ -267,5 +267,96 @@ await test("combine 'untiltop': merges before the buyer hits the top, locks afte
   assert.equal(followSlot.orderCount, 1, 'follow-up slot holds only the new order');
 });
 
+// ── L. Event spot cap: a sold-out event stops capturing (no oversell) ──
+await test("events: sold-out event stops capturing spots (respects the limit)", async () => {
+  const q = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off' });
+  const ev = q.addEvent({ type: 'quack', title: 'Cap', keywords: ['grail'], totalSpots: 2 });
+  const t = Date.now();
+  q.upsertOrder(ord('o1', 'A', 'Amy', [{ name: 'Grail Spot', qty: 1 }], t));
+  q.upsertOrder(ord('o2', 'B', 'Bob', [{ name: 'Grail Spot', qty: 1 }], t + 1));
+  assert.equal(q.eventQueue(ev.id).spotsOrdered, 2, '2/2 filled');
+  assert.equal(q.eventQueue(ev.id).soldOut, true, 'sold out');
+  // A 3rd matching order must NOT enter the event; it overflows to the main queue.
+  q.upsertOrder(ord('o3', 'C', 'Cal', [{ name: 'Grail Spot', qty: 1 }], t + 2));
+  assert.equal(q.eventQueue(ev.id).spotsOrdered, 2, 'still 2 — cap enforced, no oversell');
+  assert.ok(q.activeQueue().some((s) => s.buyerId === 'C'), 'overflow order landed in the main queue');
+});
+
+// ── M. Overlay settings: per-overlay scale/opacity/panel, clamped + persisted ─
+await test("overlays: per-overlay scale/opacity/panel are set, clamped, and persisted", async () => {
+  let q = await makeEngine({ PERPETUAL: 'true' });
+  // Defaults: both overlays exist, transparent, scale 1, panel on.
+  assert.ok(q.overlays.queue && q.overlays.vault, 'both overlays present');
+  assert.equal(q.overlays.queue.opacity, 0);
+  assert.equal(q.overlays.queue.scale, 1);
+  assert.equal(q.overlays.queue.panel, true);
+
+  // Set queue: opacity 0.4, scale 1.5, panel off.
+  assert.ok(q.setOverlaySetting('queue', { opacity: 0.4, scale: 1.5, panel: false }));
+  assert.equal(q.overlays.queue.opacity, 0.4);
+  assert.equal(q.overlays.queue.scale, 1.5);
+  assert.equal(q.overlays.queue.panel, false);
+
+  // Clamping: opacity>1 → 1, scale>3 → 3, scale<0.5 → 0.5.
+  q.setOverlaySetting('vault', { opacity: 5, scale: 9 });
+  assert.equal(q.overlays.vault.opacity, 1, 'opacity clamped to 1');
+  assert.equal(q.overlays.vault.scale, 3, 'scale clamped to 3');
+  q.setOverlaySetting('vault', { scale: 0.1 });
+  assert.equal(q.overlays.vault.scale, 0.5, 'scale clamped to 0.5');
+
+  // Unknown overlay key → no-op false.
+  assert.equal(q.setOverlaySetting('bogus', { opacity: 0.5 }), false, 'unknown overlay rejected');
+
+  // Vault opacity unchanged by queue changes (independent).
+  assert.equal(q.overlays.queue.opacity, 0.4, 'queue opacity unaffected by vault edits');
+
+  // Persists across a restart on the same data dir.
+  q = await makeEngine({ PERPETUAL: 'true' });
+  assert.equal(q.overlays.queue.opacity, 0.4, 'queue opacity restored from disk');
+  assert.equal(q.overlays.queue.scale, 1.5, 'queue scale restored');
+  assert.equal(q.overlays.queue.panel, false, 'queue panel restored');
+  assert.equal(q.overlays.vault.scale, 0.5, 'vault scale restored');
+
+  // Snapshot exposes overlays for the overlay/panel views.
+  assert.ok(q.snapshot().overlays.vault, 'snapshot exposes overlays');
+});
+
+// ── N. Daily rollover: archives fulfilled+cancelled, keeps queued, resets ─────
+await test("daily rollover: archives the day's fulfilled+cancelled, keeps queued orders", async () => {
+  const q = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off' });
+  const t = Date.now();
+  // First tick seeds lastRolloverDay without archiving.
+  assert.equal(q.maybeDailyRollover(), false, 'first tick just seeds the day');
+  assert.equal(q.history.length, 0, 'nothing archived yet');
+
+  // Two orders: fulfill one, leave one queued.
+  q.upsertOrder(ord('o1', 'A', 'Amy', [{ name: 'Pack', qty: 1 }], t));
+  q.upsertOrder(ord('o2', 'B', 'Bob', [{ name: 'Pack', qty: 1 }], t + 1));
+  const amyKey = q.activeQueue().find((s) => s.buyerId === 'A').key;
+  q.markFulfilled(amyKey);
+  assert.equal(q.activeQueue().length, 1, 'one still queued (Bob)');
+
+  // Force a day change and roll over.
+  q.lastRolloverDay = 'past-day';
+  assert.equal(q.maybeDailyRollover(), true, 'rolled over on day change');
+
+  // Fulfilled order archived to Past Days; queued order remains.
+  assert.equal(q.history.length, 1, 'one day archived');
+  assert.equal(q.history[0].count, 1, 'archived day has the 1 fulfilled order');
+  assert.ok(q.history[0].label, 'archived day has a pretty label');
+  assert.ok(Array.isArray(q.history[0].fulfilled) && q.history[0].fulfilled.length === 1, 'fulfilled records retained for CSV export');
+  assert.equal(q.activeQueue().length, 1, 'unfulfilled order still on the live queue');
+  assert.equal(q.activeQueue()[0].buyerId, 'B', 'Bob is still queued after rollover');
+
+  // A same-day second call does nothing further.
+  assert.equal(q.maybeDailyRollover(), false, 'no double rollover on the same day');
+  assert.equal(q.history.length, 1);
+
+  // Archived day survives a restart.
+  const q2 = await makeEngine({ PERPETUAL: 'true' });
+  assert.equal(q2.history.length, 1, 'Past Days entry restored from disk');
+  assert.equal(q2.activeQueue().length, 1, 'queued order restored');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
