@@ -28,7 +28,7 @@ into **Discord**. Built to handle a busy 6-hour live (hundreds of orders).
   buyer's public display name; the admin expanded view also shows their actual
   @username for cross-referencing against TikTok. The username never appears
   publicly.
-- **🐷 Piggy Bank per-variant counters** *(store-specific, via `TRACKED_VARIANTS`)*
+- **Vault per-variant counters** *(store-specific, via `TRACKED_VARIANTS`)*
   — an admin card + a public tracker tally each tracked bundle variant, +1 per
   unit when an order reaches the top. Counts are cumulative and persist across
   streams; each is manually editable (Save) and resettable (with a second
@@ -37,7 +37,7 @@ into **Discord**. Built to handle a busy 6-hour live (hundreds of orders).
 - **One-tap fulfill** — mark a slot done from the dashboard or Discord; it drops
   off the active queue into "recently fulfilled".
 - **Manual bump** — force any buyer to the very top when you need to.
-- **Durable** — queue, history, priority config, Piggy Bank counts, and TikTok
+- **Durable** — queue, history, priority config, Vault counts, and TikTok
   tokens are written to `data/`. On Render, mount a **persistent disk** at
   `/opt/render/project/src/data` so all of it survives deploys and restarts.
 
@@ -100,7 +100,7 @@ Top of the queue = next to handle:
 3. Restart. The bot posts and pins a live-updating queue message and adds
    `/queue`, `/fulfill`, and `/bump` commands for your mods. On stores that set
    `TRACKED_VARIANTS`, it also keeps a **separate, always-visible pinned message**
-   — a 🐷 Piggy Bank Tracker of the variant counts — kept apart from the queue
+   — a Vault Tracker of the variant counts — kept apart from the queue
    message so it's easy to pause or remove.
 
 ## Store-specific features (optional env)
@@ -108,7 +108,7 @@ Top of the queue = next to handle:
 The same codebase powers multiple stores; two optional env vars switch on
 per-store behavior. Leave them empty (`[]`) and the features stay dormant.
 
-- `TRACKED_VARIANTS` — JSON array of Piggy Bank counters:
+- `TRACKED_VARIANTS` — JSON array of Vault counters:
   `[{"id","label","product","variant"}]`. `product` and `variant` are lowercased
   substrings that **both** must appear in an item's name for a unit to count.
   The counts themselves are stored in `data/config.json` (persistent disk), not
@@ -129,10 +129,10 @@ changed. Saving env vars also triggers a deploy.
 server.js          wiring: web + API + poller + discord + simulator
 queue.js           the queue engine (grouping, priority, metrics, variants, persistence)
 tiktok.js          TikTok Shop OAuth + Order API poller + normalizeOrder()
-discord.js         Discord live-mirror bot (+ Piggy Bank tracker message)
+discord.js         Discord live-mirror bot (+ Vault tracker message)
 simulator.js       fake order feed for the demo
 index.html         the admin dashboard
-public.html        the public buyer-facing view (+ Piggy Bank tracker)
+public.html        the public buyer-facing view (+ Vault tracker)
 guide.html         in-app operator guide
 sandbox.html       self-contained practice sandbox (fake data, no backend)
 data/              persisted state: queue-state.json, config.json, history.json, tiktok-tokens.json

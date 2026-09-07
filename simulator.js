@@ -53,7 +53,7 @@ function pick(arr) {
 
 export function startSimulator(queue, opts = {}) {
   const intervalMs = opts.intervalMs || 2500;
-  if (opts.ipoke) return startIpokeSimulator(queue, intervalMs);
+  if (opts.ipoke) return startIpokeSimulator(queue, opts);
 
   function makeOrder() {
     seq++;
@@ -86,10 +86,21 @@ export function startSimulator(queue, opts = {}) {
   return timer;
 }
 
-// iPoke perpetual simulator: seeds two demo events (a Quack Pack + a WTA) if
-// none exist, then streams a mix of regular, priority (vintage) and event-spot
-// orders across TikTok/Shopify sources.
-function startIpokeSimulator(queue, intervalMs) {
+// iPoke DEMO simulator. This is only for demonstration — it is NOT meant to
+// mimic a real 24/7 stream. It seeds two demo events (a Quack Pack + a WTA) if
+// none exist, drops an initial batch of orders so the board looks populated,
+// then trickles a couple of new orders on a slow timer a few times and STOPS.
+// Nothing runs perpetually. Real orders come from Shopify once connected.
+//   SIM_INITIAL_BATCH   orders seeded immediately        (default 12)
+//   SIM_TRICKLE_PER     new orders added each round       (default 2)
+//   SIM_TRICKLE_CYCLES  number of trickle rounds, then stop (default 5)
+//   SIM_TRICKLE_MS      gap between rounds in ms          (default 60000)
+function startIpokeSimulator(queue, opts = {}) {
+  const initialBatch = Number.isFinite(Number(process.env.SIM_INITIAL_BATCH)) && process.env.SIM_INITIAL_BATCH
+    ? Number(process.env.SIM_INITIAL_BATCH) : 12;
+  const tricklePer = Number(process.env.SIM_TRICKLE_PER) || 2;
+  const trickleCycles = Number(process.env.SIM_TRICKLE_CYCLES) || 5;
+  const trickleMs = Number(process.env.SIM_TRICKLE_MS) || 60000;
   let quackId = null, wtaId = null;
   const existing = queue.events || [];
   const findKw = (kw) => existing.find((e) => (e.keywords || []).some((k) => k.includes(kw)));
@@ -134,9 +145,21 @@ function startIpokeSimulator(queue, intervalMs) {
     };
   }
 
-  const timer = setInterval(() => { queue.upsertOrder(makeOrder()); }, intervalMs);
+  // 1) Seed an initial batch immediately so the board looks alive on load.
+  for (let i = 0; i < initialBatch; i++) queue.upsertOrder(makeOrder());
+
+  // 2) Trickle a couple of new orders every trickleMs, a fixed number of times,
+  //    then stop entirely. No perpetual generation.
+  let cyclesLeft = trickleCycles;
+  const timer = setInterval(() => {
+    if (cyclesLeft <= 0) { clearInterval(timer); console.log('[sim] demo trickle complete — simulator stopped'); return; }
+    for (let i = 0; i < tricklePer; i++) queue.upsertOrder(makeOrder());
+    cyclesLeft--;
+  }, trickleMs);
   timer.unref?.();
-  console.log(`[sim] iPoke simulator running — perpetual, new order every ${intervalMs}ms`);
+
+  const total = initialBatch + tricklePer * trickleCycles;
+  console.log(`[sim] iPoke DEMO: seeded ${initialBatch} orders, then +${tricklePer} every ${Math.round(trickleMs / 1000)}s × ${trickleCycles} rounds (~${total} total), then stops.`);
   console.log('[sim] demo events seeded: Quack Pack #1, WTA Break — Prismatic; priority word: "vintage"');
   return timer;
 }

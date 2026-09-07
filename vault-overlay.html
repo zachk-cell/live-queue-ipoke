@@ -43,7 +43,6 @@
     border-bottom:1px solid var(--line)}
   .vault-ico{font-size:18px;flex:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.7))}
   .title{font-size:19px;font-weight:800;letter-spacing:.3px;color:var(--red);text-shadow:var(--txt-outline)}
-  .sub{padding:4px 18px 0;font-size:12.5px;color:var(--red-soft);line-height:1.4;text-shadow:var(--txt-outline)}
   .count{margin-left:auto;font-size:14px;font-weight:800;color:var(--red-soft);text-shadow:var(--txt-outline)}
   .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
@@ -67,7 +66,6 @@
       <span class="title" id="title">Vault</span>
       <span class="count" id="count"></span>
     </div>
-    <div class="sub" id="sub"></div>
     <div class="list" id="list"></div>
     <div class="more" id="more"></div>
   </div>
@@ -116,13 +114,10 @@
     const list = document.getElementById('list');
     const moreEl = document.getElementById('more');
     const titleEl = document.getElementById('title');
-    const subEl = document.getElementById('sub');
     const countEl = document.getElementById('count');
 
     const tracker = state.tracker || {};
     titleEl.textContent = TITLE || tracker.title || 'Vault';
-    subEl.textContent = tracker.subtitle || '';
-    subEl.style.display = subEl.textContent ? '' : 'none';
 
     const variants = (state.variants || []);
     const total = variants.reduce((a,v)=>a + (Number(v.count)||0), 0);
