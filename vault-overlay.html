@@ -11,7 +11,7 @@
      LIVE from the admin panel's Overlay Sliders popup (Overlay 2 = Vault).
      Query params:
        ?title=...  override the vault title
-       ?side=right panel side: left or right (default right)
+       ?side=left  panel side: left (default) or right
        ?rows=N     max rows to show (default 20) */
   :root{
     /* Background opacity of the whole panel. 0 = fully transparent (default);
@@ -31,8 +31,8 @@
   html,body{margin:0;padding:0;background:transparent;overflow:hidden;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--red)}
   #wrap{position:fixed;top:18px;bottom:18px;width:400px;display:flex;flex-direction:column;
-    transform-origin:top right}
-  #wrap.left{left:18px;transform-origin:top left} #wrap.right{right:18px;left:auto}
+    transform-origin:top left}
+  #wrap.left{left:18px;transform-origin:top left} #wrap.right{right:18px;left:auto;transform-origin:top right}
   /* Thin off-white rounded frame — ALWAYS visible (independent of --bg-alpha) so
      the overlay's edge is easy to distinguish on screen even at 0% background.
      Toggled off (with the background) by the admin bg/border checkbox. */
@@ -59,7 +59,7 @@
 </style>
 </head>
 <body>
-<div id="wrap" class="right">
+<div id="wrap" class="left">
   <div class="panel" id="panel">
     <div class="head">
       <span class="vault-ico">🔴</span>
@@ -73,7 +73,7 @@
 <script>
   const params = new URLSearchParams(location.search);
   const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 20, 60));
-  const SIDE = params.get('side') === 'left' ? 'left' : 'right';
+  const SIDE = params.get('side') === 'right' ? 'right' : 'left';
   const TITLE = params.get('title');
   const wrap = document.getElementById('wrap');
   wrap.className = SIDE;
