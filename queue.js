@@ -1372,7 +1372,9 @@ export class QueueEngine extends EventEmitter {
       return {
         id: ev.id, type: ev.type, title: ev.title, description: ev.description,
         totalSpots: ev.totalSpots, spotsOrdered: q.spotsOrdered, spotsRemaining: q.spotsRemaining,
-        soldOut: q.soldOut, entryCount: q.entryCount, status: ev.status,
+        soldOut: q.soldOut, entryCount: q.entryCount,
+        unfulfilledCount: q.unfulfilledCount, spotsUnfulfilled: q.spotsUnfulfilled,
+        status: ev.status,
         active: this.activeEventId === ev.id, keywords: ev.keywords,
         // Full ordered side-queue (admin panel consumes this; overlay uses
         // activeEvent instead, so this stays admin-only).
