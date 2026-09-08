@@ -149,7 +149,17 @@
   .vcard .vsub{color:#8b93a7;font-size:11px;line-height:1.35;margin:0 0 10px}
   .vrow{padding:8px 0;border-top:1px solid #21262f}
   .vrow:first-of-type{border-top:none}
-  .vrow .vlab{font-weight:700;font-size:13px;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vrow .vlab{font-weight:700;font-size:13px;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
+  .vrow .vlab .vdel{margin-left:auto;background:transparent;border:none;color:#6b7280;font-size:13px;cursor:pointer;padding:0 2px;line-height:1;flex:none}
+  .vrow .vlab .vdel:hover{color:#ff8b8b}
+  .vkw{color:#748099;font-size:10.5px;margin:-2px 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vempty{color:#8b93a7;font-size:12px;padding:4px 0 2px}
+  .vadd{margin-top:10px;border-top:1px solid #21262f;padding-top:10px;display:flex;flex-direction:column;gap:6px}
+  .vadd .vadd-h{font-size:12px;font-weight:700;color:#c2c9d6}
+  .vadd input{width:100%;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:7px 9px;border-radius:8px;font-size:12.5px}
+  .vadd .vadd-btn{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:8px 10px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .vadd .vadd-btn:hover{filter:brightness(1.1)}
+  .vadd .vadd-btn:disabled{opacity:.6;cursor:default}
   .vctl{display:flex;align-items:center;gap:6px}
   .vrow input{width:58px;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:6px 8px;border-radius:8px;font-size:14px;text-align:center;font-variant-numeric:tabular-nums}
   .vrow .vsave{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
@@ -751,21 +761,32 @@
   function renderVariantsAdmin(){
     const box = document.getElementById('variants-admin');
     const vs = state.variants || [];
-    if(!vs.length){ box.innerHTML=''; box._sig=''; return; }
-    const title = (state.tracker && state.tracker.title) || 'Piggy Bank';
-    const sig = vs.map(v=>v.id+':'+v.label).join('|')+'~'+title;
+    // Show the card whenever this store uses the tracker (perpetual/iPoke always,
+    // so the operator can add the first Vault), or whenever any Vault exists.
+    if(!vs.length && !state.perpetual){ box.innerHTML=''; box._sig=''; return; }
+    const title = (state.tracker && state.tracker.title) || 'Vault';
+    // Rebuild only when the DEFINITIONS change (id / display name / keyword);
+    // otherwise update counts in place so we never clobber a field being edited.
+    const sig = vs.map(v=>v.id+':'+v.label+':'+(v.variant||'')).join('|')+'~'+title;
     if(box._sig !== sig){
       box._sig = sig;
       box.innerHTML = `<div class="vcard"><h3>${esc(title)} Counter</h3>
-        <p class="vsub">Adds +1 per unit when an order reaches the top of the queue. Shown on the public page. Counts are cumulative and persist across streams — they only change from a sale, a Save, or a Reset.</p>
-        ${vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}">
-          <div class="vlab">${esc(v.label)}</div>
+        <p class="vsub">Adds +1 per unit when an order reaches the top of the queue. Shown on the public page and the ${esc(title)} overlay. Counts are cumulative and persist across streams — they only change from a sale, a Save, or a Reset.</p>
+        <div class="vlist">${vs.length ? vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}">
+          <div class="vlab">${esc(v.label)}<button class="vdel" title="Remove this ${esc(title)}" onclick="removeVault('${esc(v.id)}')">✕</button></div>
+          ${v.variant?`<div class="vkw">matches items containing “${esc(v.variant)}”</div>`:''}
           <div class="vctl">
             <input type="number" min="0" class="vin" value="${Number(v.count)||0}" />
             <button class="vsave" onclick="saveVariant('${esc(v.id)}', this)">Save</button>
             <button class="vreset" onclick="resetVariant('${esc(v.id)}')">Reset</button>
           </div>
-        </div>`).join('')}
+        </div>`).join('') : `<div class="vempty">No ${esc(title)}s yet — add your first below.</div>`}</div>
+        <div class="vadd">
+          <div class="vadd-h">+ Add a ${esc(title)}</div>
+          <input class="vadd-kw" placeholder="Item name / keyword (e.g. Prismatic Evolutions)" />
+          <input class="vadd-nm" placeholder="Display name (e.g. Prismatic Evolutions)" />
+          <button class="vadd-btn" onclick="addVault(this)">Add ${esc(title)}</button>
+        </div>
         <details class="vlogwrap"><summary>▾ Reset / edit log</summary><div class="vlog" id="vlog-list"></div></details>
       </div>`;
     } else {
@@ -777,6 +798,51 @@
       });
     }
     renderVariantLog();
+  }
+  // Build the FULL current definition list (id/label/keyword/product) from state,
+  // so add/remove can POST the whole set to /api/variants (which preserves the
+  // live count of every id that survives).
+  function currentVaultDefs(){
+    return (state.variants||[]).map(v=>({ id:v.id, label:v.label, product:v.product||'', variant:v.variant||'' }));
+  }
+  function vaultSlug(s){
+    return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'vault';
+  }
+  // Add a new Vault: keyword (what to match in the order item) + display name.
+  async function addVault(btn){
+    const wrap = btn.closest('.vadd');
+    const kw = wrap.querySelector('.vadd-kw').value.trim();
+    const nm = wrap.querySelector('.vadd-nm').value.trim();
+    if(!kw){ alert('Enter the item name or keyword that appears in the order (e.g. the set name).'); return; }
+    const label = nm || kw;
+    const defs = currentVaultDefs();
+    if(defs.some(d=>(d.variant||'').toLowerCase() === kw.toLowerCase())){
+      alert('A Vault with that keyword already exists.'); return;
+    }
+    const id = vaultSlug(label)+'-'+Date.now().toString(36);
+    defs.push({ id, label, product:'', variant: kw });
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Adding…';
+    try{
+      await postJSON('/api/variants', { variants: defs });
+      wrap.querySelector('.vadd-kw').value=''; wrap.querySelector('.vadd-nm').value='';
+    }catch{ alert("Couldn't add that Vault — check your connection and try again."); }
+    btn.disabled = false; btn.textContent = old;
+  }
+  // Remove a Vault definition (its counter is discarded; confirm first).
+  async function removeVault(id){
+    const cur = (state.variants||[]).find(v=>v.id===id);
+    const label = cur ? cur.label : id;
+    const cnt = cur ? (Number(cur.count)||0) : 0;
+    const title = (state.tracker && state.tracker.title) || 'Vault';
+    const ok = await uiConfirm({
+      title: 'Remove "'+label+'"?',
+      body: 'This removes the '+label+' '+title+' and its counter (currently '+cnt+') from the tracker. It won\'t affect any orders. This can\'t be undone from here.',
+      confirmText: 'Remove', danger:true
+    });
+    if(!ok) return;
+    const defs = currentVaultDefs().filter(d=>d.id!==id);
+    try{ await postJSON('/api/variants', { variants: defs }); }
+    catch{ alert("Couldn't remove that Vault — check your connection and try again."); }
   }
   function fmtLogTime(ts){
     try{ return new Date(ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }
