@@ -269,19 +269,34 @@ export class QueueEngine extends EventEmitter {
   }
 
   /** Add an order's units to any matching tracked-variant counters. Matches on
-   *  the item name/SKU text: requires the variant substring, and (if set) the
-   *  product substring too, so a short variant token can't match unrelated items. */
+   *  the item name/SKU/variant text: requires the tracked keyword substring, and
+   *  (if set) the product substring too, so a short token can't match unrelated
+   *  items.
+   *
+   *  Vault multiplier: each Vault set is sold in tiered variants like
+   *  "5 Packs (1 Vault)", "25 Packs (5 Vault)", "50 Packs (10 Vault)". One unit
+   *  of a "(N Vault)" variant adds N to the counter, so it counts *vaults*, not
+   *  packs — e.g. 5× "5 Packs (1 Vault)" = +5, but 1× "25 Packs (5 Vault)" = +5
+   *  and 1× "50 Packs (10 Vault)" = +10. When no "(N Vault)" tier is present the
+   *  multiplier is 1, preserving the simple "+1 per unit" behaviour. */
+  _vaultUnitsPerItem(it) {
+    // Prefer the variant field (cleanest), fall back to the folded item name.
+    let m = String(it.variant || '').toLowerCase().match(/(\d+)\s*vault/);
+    if (!m) m = String(it.name || '').toLowerCase().match(/(\d+)\s*vault/);
+    return m ? Math.max(1, parseInt(m[1], 10)) : 1;
+  }
   _tallyVariants(order) {
     if (!this.trackedVariants.length) return;
     for (const it of (order.items || [])) {
-      const text = `${it.name || ''} ${it.sku || ''}`.toLowerCase();
+      const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
       const qty = it.qty || 1;
+      const perItem = this._vaultUnitsPerItem(it);
       for (const v of this.trackedVariants) {
         const prod = (v.product || '').toLowerCase();
         const varn = (v.variant || '').toLowerCase();
         if (!varn) continue;
         if ((!prod || text.includes(prod)) && text.includes(varn)) {
-          this.variantCounts[v.id] = (this.variantCounts[v.id] || 0) + qty;
+          this.variantCounts[v.id] = (this.variantCounts[v.id] || 0) + perItem * qty;
         }
       }
     }
@@ -1150,11 +1165,13 @@ export class QueueEngine extends EventEmitter {
     return [...new Set((arr || []).map((s) => String(s).trim().toLowerCase()).filter(Boolean))];
   }
 
-  /** Spots currently ordered (queued) for one event. */
+  /** Spots SOLD for one event (queued + fulfilled — everything except cancelled).
+   *  Fulfilling a spot must NOT free capacity, or the cap could be oversold, so
+   *  this counts fulfilled entries too. */
   _eventSpotsOrdered(eventId) {
     let n = 0;
     for (const e of this.eventEntries.values()) {
-      if (e.eventId === eventId && e.status === 'queued') n += (Number(e.spots) || 0);
+      if (e.eventId === eventId && (e.status === 'queued' || e.status === 'fulfilled')) n += (Number(e.spots) || 0);
     }
     return n;
   }
@@ -1279,26 +1296,58 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Mark one event spot fulfilled (or un-fulfill it) as the streamer works
+   *  through the side-queue. A fulfilled spot still counts toward the event's
+   *  capacity and stays visible on the ADMIN side (shown "done") until the whole
+   *  event is marked fulfilled; the public overlay drops it so viewers see only
+   *  who's still up. */
+  setEventEntryFulfilled(entryId, on = true) {
+    const e = this.eventEntries.get(String(entryId));
+    if (!e) return false;
+    if (on) {
+      if (e.status !== 'queued') return false;
+      e.status = 'fulfilled';
+      e.fulfilledAt = Date.now();
+    } else {
+      if (e.status !== 'fulfilled') return false;
+      e.status = 'queued';
+      delete e.fulfilledAt;
+    }
+    this._persist();
+    this.emit('change', { reason: 'event-entry-fulfilled', entryId: String(entryId), on: !!on });
+    return true;
+  }
+
   /** The ordered side-queue for one event (first-in-first-served, no skipping),
    *  plus spot totals. */
   eventQueue(id) {
     const ev = this.events.find((e) => e.id === id);
     if (!ev) return null;
-    const entries = [...this.eventEntries.values()]
-      .filter((e) => e.eventId === id && e.status === 'queued')
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-      .map((e, i) => ({
-        id: e.id,
-        position: i + 1,
-        buyer: this._displayName(e.buyerId, e.buyer),
-        buyerId: e.buyerId,
-        spots: e.spots,
-        itemName: e.itemName,
-        source: e.source || '',
-        orderId: e.orderId,
-        createdAt: e.createdAt,
-      }));
-    const spotsOrdered = entries.reduce((n, e) => n + e.spots, 0);
+    // All non-cancelled spots (queued + per-slot fulfilled), ordered by purchase
+    // time. "Sold" totals come from this whole set so the cap and the meter never
+    // move as spots are worked through.
+    const all = [...this.eventEntries.values()]
+      .filter((e) => e.eventId === id && (e.status === 'queued' || e.status === 'fulfilled'))
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const spotsOrdered = all.reduce((n, e) => n + (Number(e.spots) || 0), 0);
+    const spotsUnfulfilled = all.reduce((n, e) => n + (e.status === 'fulfilled' ? 0 : (Number(e.spots) || 0)), 0);
+    // Displayed rows: while the event is OPEN, show every spot (per-slot fulfilled
+    // ones flagged done so the admin keeps them visible). Once the WHOLE event is
+    // ripped/fulfilled, the done spots drop off entirely.
+    const shown = (ev.status === 'ripped') ? all.filter((e) => e.status !== 'fulfilled') : all;
+    const entries = shown.map((e, i) => ({
+      id: e.id,
+      position: i + 1,
+      buyer: this._displayName(e.buyerId, e.buyer),
+      buyerId: e.buyerId,
+      spots: e.spots,
+      itemName: e.itemName,
+      source: e.source || '',
+      orderId: e.orderId,
+      createdAt: e.createdAt,
+      fulfilled: e.status === 'fulfilled',
+      fulfilledAt: e.fulfilledAt || null,
+    }));
     return {
       id: ev.id,
       type: ev.type,
@@ -1310,6 +1359,8 @@ export class QueueEngine extends EventEmitter {
       spotsRemaining: Math.max(0, ev.totalSpots - spotsOrdered),
       soldOut: ev.totalSpots > 0 && spotsOrdered >= ev.totalSpots,
       entryCount: entries.length,
+      unfulfilledCount: entries.filter((e) => !e.fulfilled).length,
+      spotsUnfulfilled,
       entries,
     };
   }

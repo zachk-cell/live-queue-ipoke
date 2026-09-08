@@ -237,6 +237,11 @@
   .eqrow .eqsp{color:var(--pri);font-weight:800}
   .eqrow .eqx{background:transparent;border:1px solid transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px}
   .eqrow .eqx:hover{color:var(--danger);border-color:var(--danger)}
+  .eqrow .eqdone{background:#12331f;border:1px solid #1c5133;color:#43e08a;cursor:pointer;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:7px;white-space:nowrap}
+  .eqrow .eqdone:hover{filter:brightness(1.15)}
+  .eqrow .eqdone.on{background:#173a24;color:#57e0a6;border-color:#2a7048}
+  .eqrow.done{opacity:.55}
+  .eqrow.done .eqnm{text-decoration:line-through;color:var(--muted)}
   .eexpand{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;margin-top:7px}
   .card select,.card input[type=text],.card input[type=number]{width:100%;background:var(--panel2);
     border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px;font-size:13px;font-family:inherit;margin-top:4px}
@@ -1057,6 +1062,12 @@
       confirmText:'Remove spot', danger:true});
     if(ok) await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/remove');
   }
+  // Mark a single event spot fulfilled / un-fulfilled as you work through it. It
+  // stays on the admin list (shown done) but drops off the public overlay.
+  async function fulfillEventEntryUI(entryId, on){
+    try{ await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/fulfill', { on: on }); }
+    catch{ alert("Couldn't update that spot — check your connection and try again."); }
+  }
   function toggleEventQueue(id){
     if(expandedEvents.has(id)) expandedEvents.delete(id); else expandedEvents.add(id);
     renderEventsAdmin(true);
@@ -1066,8 +1077,9 @@
     const box = document.getElementById('events-admin');
     const evs = state.events||[];
     const sig = JSON.stringify(evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.status,e.active,
+      e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), expandedEvents.has(e.id)?1:0,
-      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots).join('|'):'']));
+      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')).join('|'):'']));
     if(!force && box._sig===sig) return;
     box._sig = sig;
     const rowHtml = (e)=>{
@@ -1078,11 +1090,12 @@
         : `${e.spotsOrdered} spots ordered`;
       const ripped = e.status==='ripped';
       const entries = (e.entries||[]);
-      const eq = entries.length ? entries.map(en=>`<div class="eqrow">
+      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}">
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
           ${en.spots>1?`<span class="eqsp">×${en.spots}</span>`:''}
           ${en.source?`<span class="srcbadge ${esc(srcShort(en.source))}">${esc(srcShort(en.source))}</span>`:''}
+          <button class="eqdone${en.fulfilled?' on':''}" title="${en.fulfilled?'Undo — mark not fulfilled':'Mark this spot fulfilled'}" onclick="fulfillEventEntryUI('${en.id}',${en.fulfilled?'false':'true'})">${en.fulfilled?'✓ Done':'Fulfill'}</button>
           <button class="eqx" title="Remove this spot" onclick="removeEventEntryUI('${en.id}')">✕</button>
         </div>`).join('') : '<div class="eqrow" style="color:#748099">No spots yet.</div>';
       return `<div class="erow ${expandedEvents.has(e.id)?'open':''}">
@@ -1104,7 +1117,7 @@
         </div>
         ${e.description?`<div class="ekw">${esc(e.description)}</div>`:''}
         <div class="ekw">🔑 ${(e.keywords||[]).map(esc).join(', ')||'<i>no keywords</i>'}</div>
-        <button class="eexpand" onclick="toggleEventQueue('${e.id}')">${expandedEvents.has(e.id)?'▾ Hide':'▸ Show'} side-queue (${e.entryCount})</button>
+        <button class="eexpand" onclick="toggleEventQueue('${e.id}')">${expandedEvents.has(e.id)?'▾ Hide':'▸ Show'} side-queue (${(e.unfulfilledCount!=null && e.unfulfilledCount!==e.entryCount)?`${e.unfulfilledCount} left of ${e.entryCount}`:e.entryCount})</button>
         <div class="equeue">${eq}</div>
       </div>`;
     };

@@ -145,6 +145,16 @@ function startIpokeSimulator(queue, opts = {}) {
     };
   }
 
+  // If the board already has orders (e.g. a redeploy restoring the demo from
+  // disk), DON'T seed again — otherwise every deploy would stack another batch.
+  // The demo only seeds onto a genuinely empty board (a fresh start / after a
+  // wipe). Events are still ensured above so their definitions persist.
+  const alreadyPopulated = typeof queue.activeQueue === 'function' && queue.activeQueue().length > 0;
+  if (alreadyPopulated) {
+    console.log('[sim] iPoke DEMO: board already populated — skipping seed (no new demo orders).');
+    return null;
+  }
+
   // 1) Seed an initial batch immediately so the board looks alive on load.
   for (let i = 0; i < initialBatch; i++) queue.upsertOrder(makeOrder());
 

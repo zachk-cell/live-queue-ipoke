@@ -358,5 +358,74 @@ await test("daily rollover: archives the day's fulfilled+cancelled, keeps queued
   assert.equal(q2.activeQueue().length, 1, 'queued order restored');
 });
 
+// ── O. Vault multiplier: "(N Vault)" tier × quantity ──────────────────────────
+await test("vault counter: counts (N Vault) tier × qty, not raw packs", async () => {
+  const q = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off' });
+  q.setTrackedVariants([
+    { id: 'ah', label: 'Ascended Heroes', product: '', variant: 'Ascended Heroes' },
+    { id: 'pe', label: 'Prismatic Evolutions', product: '', variant: 'Prismatic Evolutions' },
+  ]);
+  const t = Date.now();
+  const nm = (set, tier) => `Pokemon TCG: iPoke VAULT (${set}) - ${tier}`;
+  // 5× "5 Packs (1 Vault)" → +5 (1 each)
+  q.upsertOrder(ord('o1', 'A', 'Amy', [{ name: nm('Ascended Heroes', '5 Packs (1 Vault)'), variant: '5 Packs (1 Vault)', qty: 5 }], t));
+  // 1× "25 Packs (5 Vault)" → +5
+  q.upsertOrder(ord('o2', 'B', 'Bob', [{ name: nm('Ascended Heroes', '25 Packs (5 Vault)'), variant: '25 Packs (5 Vault)', qty: 1 }], t + 1));
+  // 2× "50 Packs (10 Vault)" → +20
+  q.upsertOrder(ord('o3', 'C', 'Cal', [{ name: nm('Prismatic Evolutions', '50 Packs (10 Vault)'), variant: '50 Packs (10 Vault)', qty: 2 }], t + 2));
+  // 1× "5 Packs (1 Vault)" → +1
+  q.upsertOrder(ord('o4', 'D', 'Dee', [{ name: nm('Prismatic Evolutions', '5 Packs (1 Vault)'), variant: '5 Packs (1 Vault)', qty: 1 }], t + 3));
+  let g = 0; while (q.activeQueue().length && g++ < 20) q.markFulfilled(q.activeQueue()[0].key);
+  const byId = Object.fromEntries(q.snapshot().variants.map((v) => [v.id, v.count]));
+  assert.equal(byId.ah, 10, 'Ascended Heroes = 5 + 5');
+  assert.equal(byId.pe, 21, 'Prismatic Evolutions = 20 + 1');
+
+  // No "(N Vault)" tier → multiplier 1 (legacy behaviour preserved).
+  const q2 = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off' });
+  q2.setTrackedVariants([{ id: 'pb', label: 'Piggy', product: '', variant: 'Charizard' }]);
+  q2.upsertOrder(ord('x1', 'A', 'Amy', [{ name: 'Charizard single', qty: 3 }], Date.now()));
+  q2.markFulfilled(q2.activeQueue()[0].key);
+  assert.equal(q2.snapshot().variants[0].count, 3, 'plain counter still adds qty×1');
+});
+
+// ── P. Event per-slot fulfillment: admin keeps it, overlay drops it, cap holds ─
+await test("event fulfill: spot stays on admin (done), overlay drops it, no oversell", async () => {
+  const q = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off' });
+  const ev = q.addEvent({ type: 'quack', title: 'Q', keywords: ['quack'], totalSpots: 5 });
+  const t = Date.now();
+  q.upsertOrder(ord('e1', 'A', 'Amy', [{ name: 'quack spot', qty: 2 }], t));
+  q.upsertOrder(ord('e2', 'B', 'Bob', [{ name: 'quack spot', qty: 1 }], t + 1));
+  q.upsertOrder(ord('e3', 'C', 'Cal', [{ name: 'quack spot', qty: 2 }], t + 2));
+  let eq = q.eventQueue(ev.id);
+  assert.equal(eq.entryCount, 3);
+  assert.equal(eq.unfulfilledCount, 3);
+  assert.equal(eq.spotsOrdered, 5);
+  assert.equal(eq.soldOut, true);
+
+  const firstId = eq.entries[0].id;
+  assert.ok(q.setEventEntryFulfilled(firstId, true), 'fulfilled the first spot');
+  eq = q.eventQueue(ev.id);
+  assert.equal(eq.entryCount, 3, 'admin still shows all 3 spots');
+  assert.equal(eq.entries.find((e) => e.id === firstId).fulfilled, true, 'first is flagged done');
+  assert.equal(eq.unfulfilledCount, 2, 'two still waiting');
+  assert.equal(eq.spotsOrdered, 5, 'sold total unchanged (fulfilling does not free capacity)');
+
+  // Overflow attempt while full → must NOT enter the event (no oversell).
+  q.upsertOrder(ord('e4', 'D', 'Dee', [{ name: 'quack spot', qty: 1 }], t + 3));
+  assert.equal(q.eventQueue(ev.id).spotsOrdered, 5, 'still 5 sold — cap enforced after fulfilling');
+  assert.ok(q.activeQueue().some((s) => s.buyerId === 'D'), 'overflow order went to the main queue');
+
+  // Un-fulfill restores it.
+  assert.ok(q.setEventEntryFulfilled(firstId, false));
+  assert.equal(q.eventQueue(ev.id).unfulfilledCount, 3, 'un-fulfill puts it back');
+
+  // Persists across a restart.
+  q.setEventEntryFulfilled(firstId, true);
+  const q2 = await makeEngine({ PERPETUAL: 'true' });
+  const eq2 = q2.eventQueue(ev.id);
+  assert.equal(eq2.unfulfilledCount, 2, 'fulfilled state restored from disk');
+  assert.equal(eq2.entries.find((e) => e.id === firstId).fulfilled, true);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

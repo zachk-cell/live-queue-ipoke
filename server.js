@@ -186,8 +186,10 @@ function overlayView() {
       spotsOrdered: active.spotsOrdered,
       spotsRemaining: active.spotsRemaining,
       soldOut: active.soldOut,
-      entries: active.entries.map((e) => ({
-        position: e.position, buyer: e.buyer, spots: e.spots, source: srcShort(e.source),
+      // Public overlay: drop spots already fulfilled and renumber, so viewers
+      // see only who's still up. (The admin keeps the fulfilled ones visible.)
+      entries: active.entries.filter((e) => !e.fulfilled).map((e, i) => ({
+        position: i + 1, buyer: e.buyer, spots: e.spots, source: srcShort(e.source),
       })),
     } : null,
     queue: live
@@ -340,6 +342,11 @@ app.get('/api/events/:id', requireAuth, (req, res) => {
   res.json(q);
 });
 app.post('/api/event-entry/:id/remove', requireAuth, (req, res) => res.json({ ok: queue.removeEventEntry(req.params.id) }));
+// Mark one event spot fulfilled (body {on:true}) or un-fulfill it ({on:false}).
+app.post('/api/event-entry/:id/fulfill', requireAuth, (req, res) => {
+  const on = req.body && req.body.on === false ? false : true;
+  res.json({ ok: queue.setEventEntryFulfilled(req.params.id, on) });
+});
 
 // Order combining: mode = 'always' | 'off' | 'time'; windowMinutes for 'time'.
 app.post('/api/combine', requireAuth, (req, res) => {
