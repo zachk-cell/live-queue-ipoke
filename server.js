@@ -299,6 +299,9 @@ app.get('/api/state', requireAuth, (_req, res) => res.json(queue.snapshot()));
 app.post('/api/fulfill/:key', requireAuth, (req, res) => res.json({ ok: !!queue.markFulfilled(req.params.key) }));
 app.post('/api/reopen/:key', requireAuth, (req, res) => res.json({ ok: !!queue.reopen(req.params.key) }));
 app.post('/api/bump/:key', requireAuth, (req, res) => res.json({ ok: !!queue.bump(req.params.key) }));
+// Put a slot on hold (off the main queue) / return it to the top of the queue.
+app.post('/api/hold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.holdSlot(req.params.key) }));
+app.post('/api/unhold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.unholdSlot(req.params.key) }));
 app.post('/api/priority-items', requireAuth, (req, res) => {
   queue.setPriorityItems(req.body.items || []);
   res.json({ ok: true, priorityItems: queue.priorityItems });

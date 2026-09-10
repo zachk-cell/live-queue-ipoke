@@ -144,6 +144,30 @@
   #variants-admin{position:fixed;right:calc(50% + 614px);top:150px;width:266px;max-height:calc(100vh - 170px);
     overflow:auto;z-index:4}
   @media (max-width:1499px){#variants-admin{position:static;width:auto;max-height:none;margin:6px 0 14px}}
+  /* On-hold side panel — mirrors the Vault card on the right edge. */
+  #held-admin{position:fixed;left:calc(50% + 614px);top:150px;width:266px;max-height:calc(100vh - 170px);
+    overflow:auto;z-index:4}
+  #held-admin:empty{display:none}
+  @media (max-width:1499px){#held-admin{position:static;width:auto;max-height:none;margin:6px 0 14px}}
+  .hcard{background:#171a21;border:1px solid #3a2f1a;border-radius:12px;padding:12px 14px}
+  .hcard h3{margin:0;font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer}
+  .hcard h3 .hcav{color:#8b93a7;font-size:11px;transition:transform .15s}
+  .hcard.collapsed h3 .hcav{transform:rotate(-90deg)}
+  .hcard .hsub{color:#8b93a7;font-size:11px;line-height:1.35;margin:8px 0 4px}
+  .hcard.collapsed .hbody{display:none}
+  .hrow{display:flex;align-items:center;gap:7px;padding:8px 0;border-top:1px solid #21262f;flex-wrap:wrap}
+  .hrow:first-of-type{border-top:none}
+  .hrow .hnm{font-weight:700;font-size:13px;flex:1;min-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hrow .hord{color:#748099;font-size:11px;font-variant-numeric:tabular-nums;width:100%}
+  .hrow .htotop{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .hrow .htotop:hover{filter:brightness(1.1)}
+  .slot .actions .holdb{background:#3a2f1a;border:1px solid #5a4a2a;color:#ffce7a;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .slot .actions .holdb:hover{background:#4a3c22}
+  /* Client-side pager for the active queue. */
+  .qpager{display:flex;align-items:center;gap:12px;justify-content:center;margin:12px 4px 4px;color:var(--muted);font-size:12.5px}
+  .qpager button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer}
+  .qpager button:disabled{opacity:.4;cursor:default}
+  .qpager .qpinfo{font-variant-numeric:tabular-nums}
   .vcard{background:#171a21;border:1px solid #272c38;border-radius:12px;padding:12px 14px}
   .vcard h3{margin:0 0 4px;font-size:13px}
   .vcard .vsub{color:#8b93a7;font-size:11px;line-height:1.35;margin:0 0 10px}
@@ -203,8 +227,18 @@
   /* Events admin panel */
   #events-admin{margin:6px 0 4px}
   .ecard{background:#171a21;border:1px solid #272c38;border-radius:12px;padding:12px 14px}
+  .ecard.collapsed{padding:10px 14px}
   .ecard .eh{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-  .ecard .eh h3{margin:0;font-size:14px}
+  .ecard.collapsed .eh{margin-bottom:0}
+  .ecard .eh h3{margin:0;font-size:14px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+  .ecard .eh h3 .ecav{color:#8b93a7;font-size:11px;transition:transform .15s}
+  .ecard.collapsed .eh h3 .ecav{transform:rotate(-90deg)}
+  .emini-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+  .emini{display:flex;align-items:center;gap:9px;font-size:12.5px}
+  .emini .emininm{font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .emini .eminisp{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .emini .eminisp .rem{color:var(--pri);font-weight:800}
+  .emini .eminisp .full{color:var(--done);font-weight:800}
   .ecard .eh .eadd{margin-left:auto;background:#2b6bff;border:none;color:#fff;font-weight:700;padding:7px 12px;border-radius:8px;font-size:12.5px;cursor:pointer}
   .erow{border-top:1px solid #21262f;padding:10px 0}
   .erow:first-of-type{border-top:none}
@@ -274,6 +308,7 @@
     <a href="{{ADMIN}}/history" style="text-decoration:none"><button class="ghost">🗂 Past Days ↗</button></a>
     <a href="/" target="_blank" style="text-decoration:none"><button class="ghost">Public view ↗</button></a>
     <button id="combinePill" class="combine-pill" style="display:none" onclick="openCombine()">⇄ Combining: <span class="cm" id="cm-label">…</span></button>
+    <button class="ghost" id="sectionOrderBtn" style="display:none" onclick="toggleSectionOrder()" title="Move the Events & side-queues section above or below the main queue">⇅ Events on top</button>
     <a href="/overlay" target="_blank" id="overlayLink" style="text-decoration:none;display:none"><button class="ghost">📺 Overlay ↗</button></a>
   </div>
 
@@ -282,6 +317,7 @@
   <div id="events-admin" style="display:none"></div>
 
   <div id="variants-admin"></div>
+  <div id="held-admin"></div>
 
   <div id="offline-banner" class="offline-banner" style="display:none">
     ⚫ You're <b>offline</b> — new orders are being ignored and won't enter the queue. Hit <b>Go Live</b> to start a fresh queue and begin accepting orders.
@@ -289,19 +325,22 @@
 
   <div id="tt-banner" class="offline-banner" style="display:none"></div>
 
-  <div class="sectitle">Active queue — top is next</div>
-  <div id="queue"></div>
+  <div id="queue-block">
+    <div class="sectitle">Active queue — top is next</div>
+    <div id="queue"></div>
+    <div id="queue-pager" class="qpager" style="display:none"></div>
 
-  <div class="sectitle collapser" id="fhead" onclick="toggleSection('fulfilled')" style="display:flex;align-items:center;gap:8px">
-    <span class="cav">▾</span><span>Fulfilled today</span><span class="secount" id="f-count"></span>
-    <a href="/api/export" style="text-decoration:none;margin-left:auto" onclick="event.stopPropagation()"><button class="ghost">⬇ Export CSV</button></a>
-  </div>
-  <div id="fulfilled"></div>
+    <div class="sectitle collapser" id="fhead" onclick="toggleSection('fulfilled')" style="display:flex;align-items:center;gap:8px">
+      <span class="cav">▾</span><span>Fulfilled today</span><span class="secount" id="f-count"></span>
+      <a href="/api/export" style="text-decoration:none;margin-left:auto" onclick="event.stopPropagation()"><button class="ghost">⬇ Export CSV</button></a>
+    </div>
+    <div id="fulfilled"></div>
 
-  <div class="sectitle collapser" id="chead" onclick="toggleSection('cancelled')" style="display:flex;align-items:center;gap:8px">
-    <span class="cav">▾</span><span>Cancelled today</span><span class="secount" id="c-count"></span>
+    <div class="sectitle collapser" id="chead" onclick="toggleSection('cancelled')" style="display:flex;align-items:center;gap:8px">
+      <span class="cav">▾</span><span>Cancelled today</span><span class="secount" id="c-count"></span>
+    </div>
+    <div id="cancelled"></div>
   </div>
-  <div id="cancelled"></div>
 </main>
 
 <div class="modal" id="confirmModal">
@@ -446,6 +485,8 @@
   async function post(url){ await fetch(url,{method:'POST'}); }
   function fulfill(key){ post('/api/fulfill/'+encodeURIComponent(key)); }
   function bump(key){ post('/api/bump/'+encodeURIComponent(key)); }
+  function holdOrder(key){ post('/api/hold/'+encodeURIComponent(key)); }
+  function unholdOrder(key){ post('/api/unhold/'+encodeURIComponent(key)); }
 
   // Deliberate confirmation modal (returns a Promise<boolean>). Used for the
   // destructive actions — Reset, End Live, Remove — so they can't be blown
@@ -681,6 +722,7 @@
       + `<button class="labelb" title="Print 2.25×1.25 label" onclick="printLabel('${e.key}')">🏷 Label</button>`
       + `<div class="money">${money(e.total)}</div>`
       + `<div class="actions">${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
+      + `<button class="holdb" title="Put on hold — moves it to the On-hold sidebar until you're ready" onclick="holdOrder('${e.key}')">⏸ Hold</button>`
       + `<button class="fulfill" onclick="fulfill('${e.key}')">✓ Fulfilled</button></div>`
       + `</div>`
       + `<div class="details">${detailItems}${detailOrds}</div>`;
@@ -714,6 +756,20 @@
     });
   }
   setInterval(tickTimers, 1000);
+  // ── Active-queue pagination (client-side; no reload — just this area swaps) ──
+  const QUEUE_PAGE_SIZE = 25;
+  let queuePage = 1;
+  let _lastQueueFilter = null;
+  function queueGoPage(n){ queuePage = n; renderQueue(); }
+  function renderQueuePager(total, pages, start, end){
+    const el = document.getElementById('queue-pager'); if(!el) return;
+    if(pages <= 1){ el.style.display='none'; el.innerHTML=''; return; }
+    el.style.display='flex';
+    el.innerHTML =
+      `<button ${queuePage<=1?'disabled':''} onclick="queueGoPage(${queuePage-1})">‹ Prev</button>`
+      + `<span class="qpinfo">Showing ${start+1}–${end} of ${total} &nbsp;·&nbsp; Page ${queuePage} of ${pages}</span>`
+      + `<button ${queuePage>=pages?'disabled':''} onclick="queueGoPage(${queuePage+1})">Next ›</button>`;
+  }
   function renderQueue(){
     const filter = (document.getElementById('search').value||'').toLowerCase();
     // Detect buyers who share an identical display name with ANOTHER buyer in
@@ -730,11 +786,24 @@
     if(!list.length){
       if(!qEl.querySelector('.empty')) qEl.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>';
       slotNodes.forEach(n=>n.remove()); slotNodes.clear();
+      renderQueuePager(0, 1, 0, 0);
       return;
     }
     const emptyEl = qEl.querySelector('.empty'); if(emptyEl) emptyEl.remove();
+    // Reset to page 1 whenever the search filter changes.
+    if(filter !== _lastQueueFilter){ queuePage = 1; _lastQueueFilter = filter; }
+    // Paginate: only the current page's slots are rendered; the rest are removed
+    // by the cleanup pass below, so the queue area "turns the page" in place.
+    const total = list.length;
+    const pages = Math.max(1, Math.ceil(total / QUEUE_PAGE_SIZE));
+    if(queuePage > pages) queuePage = pages;
+    if(queuePage < 1) queuePage = 1;
+    const start = (queuePage - 1) * QUEUE_PAGE_SIZE;
+    const end = Math.min(start + QUEUE_PAGE_SIZE, total);
+    const pageList = list.slice(start, end);
+    renderQueuePager(total, pages, start, end);
     const seen = new Set();
-    list.forEach((e, idx) => {
+    pageList.forEach((e, idx) => {
       seen.add(e.key);
       let node = slotNodes.get(e.key);
       const sig = slotSig(e);
@@ -892,6 +961,66 @@
     }catch{ alert("Couldn't reset that counter — check your connection and try again."); }
   }
 
+  // ── On-hold side panel ──────────────────────────────────────────────────────
+  // Held orders live off the main queue. Condensed rows (name + order #) with a
+  // one-click "Return to top" that pushes the order back to position 1.
+  let heldCollapsed = false;
+  try { heldCollapsed = localStorage.getItem('ipoke.heldCollapsed') === '1'; } catch {}
+  function toggleHeldPanel(){
+    heldCollapsed = !heldCollapsed;
+    try { localStorage.setItem('ipoke.heldCollapsed', heldCollapsed?'1':'0'); } catch {}
+    renderHeldAdmin(true);
+  }
+  function renderHeldAdmin(force){
+    const box = document.getElementById('held-admin');
+    if(!box) return;
+    const held = state.held || [];
+    if(!held.length){ box.innerHTML=''; box._sig=''; return; }
+    const sig = held.map(h=>h.key+':'+h.buyer+':'+(h.orderNames||[]).join(',')).join('|')+'~'+(heldCollapsed?'c':'o');
+    if(!force && box._sig === sig) return;
+    box._sig = sig;
+    box.innerHTML = `<div class="hcard${heldCollapsed?' collapsed':''}">
+      <h3 onclick="toggleHeldPanel()"><span class="hcav">▾</span>⏸ On hold <span style="color:#ffce7a">(${held.length})</span></h3>
+      <div class="hbody">
+        <p class="hsub">Set aside off the main queue. "To top" returns an order to position&nbsp;1.</p>
+        ${held.map(h=>`<div class="hrow">
+          <span class="hnm">${esc(h.buyer)}${h.sourceShort?` <span class="srcbadge ${esc(h.sourceShort)}">${esc(h.sourceShort)}</span>`:''}</span>
+          <button class="htotop" onclick="unholdOrder('${esc(h.key)}')">↩ To top</button>
+          <span class="hord">${(h.orderNames||[]).map(n=>esc(n)).join('  ')}</span>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  // ── Swappable section order: Events above or below the main queue ────────────
+  let eventsBelow = false;
+  try { eventsBelow = localStorage.getItem('ipoke.eventsBelow') === '1'; } catch {}
+  function applySectionOrder(){
+    const events = document.getElementById('events-admin');
+    const qb = document.getElementById('queue-block');
+    if(!events || !qb) return;
+    const main = qb.parentNode;
+    if(eventsBelow){
+      // Move Events inside the queue block, just under the active queue list.
+      const pager = document.getElementById('queue-pager');
+      const anchor = pager ? pager.nextSibling : qb.firstChild;
+      if(events.parentNode !== qb || events.nextSibling !== anchor) qb.insertBefore(events, anchor);
+    } else {
+      // Default: Events sits directly above the queue block.
+      if(events.parentNode !== main || events.nextSibling !== qb) main.insertBefore(events, qb);
+    }
+  }
+  function updateSectionOrderBtn(){
+    const b = document.getElementById('sectionOrderBtn'); if(!b) return;
+    b.textContent = eventsBelow ? '⇅ Events: below queue' : '⇅ Events: on top';
+  }
+  function toggleSectionOrder(){
+    eventsBelow = !eventsBelow;
+    try { localStorage.setItem('ipoke.eventsBelow', eventsBelow?'1':'0'); } catch {}
+    applySectionOrder();
+    updateSectionOrderBtn();
+  }
+
   function render(){
     const st = state.stats||{};
     const live = !!st.live;
@@ -919,7 +1048,8 @@
     document.getElementById('overlayLink').style.display = perp ? '' : 'none';
     document.getElementById('events-admin').style.display = perp ? '' : 'none';
     document.getElementById('ovBtn').style.display = perp ? '' : 'none';
-    if(perp) syncOverlaySliders(state.overlays);
+    document.getElementById('sectionOrderBtn').style.display = perp ? '' : 'none';
+    if(perp){ syncOverlaySliders(state.overlays); applySectionOrder(); updateSectionOrderBtn(); }
 
     document.getElementById('s-active').textContent = st.activeCount||0;
     document.getElementById('s-pri').textContent = st.priorityCount||0;
@@ -938,6 +1068,7 @@
     renderQueue();
     tickTimers();
     renderVariantsAdmin();
+    renderHeldAdmin();
     renderEventsAdmin();
     updateCombineBar();
 
@@ -1076,10 +1207,10 @@
     if(!state.perpetual){ return; }
     const box = document.getElementById('events-admin');
     const evs = state.events||[];
-    const sig = JSON.stringify(evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.status,e.active,
+    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.status,e.active,
       e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), expandedEvents.has(e.id)?1:0,
-      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')).join('|'):'']));
+      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')).join('|'):''])]);
     if(!force && box._sig===sig) return;
     box._sig = sig;
     const rowHtml = (e)=>{
@@ -1121,11 +1252,32 @@
         <div class="equeue">${eq}</div>
       </div>`;
     };
-    box.innerHTML = `<div class="ecard">
-      <div class="eh"><h3>🎟 Events & side-queues</h3>
+    // Condensed one-line-per-event view shown when the section is collapsed.
+    const miniHtml = (e)=>{
+      const spots = e.totalSpots>0
+        ? (e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
+                     : `<span class="rem">${e.spotsRemaining} left</span> / ${e.totalSpots}`)
+        : `${e.spotsOrdered} ordered`;
+      return `<div class="emini"><span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>`
+        + `<span class="emininm">${esc(e.title)}</span>`
+        + `${e.active?'<span class="eactive">● ON</span>':''}`
+        + `<span class="eminisp">${spots}</span></div>`;
+    };
+    box.innerHTML = `<div class="ecard${eventsCollapsed?' collapsed':''}">
+      <div class="eh">
+        <h3 onclick="toggleEventsCollapse()" title="Collapse / expand this section"><span class="ecav">▾</span>🎟 Events &amp; side-queues</h3>
         <button class="eadd" onclick="openEvent()">＋ Add event</button></div>
-      ${evs.length ? evs.map(rowHtml).join('') : '<div style="color:#748099;font-size:13px;padding:6px 0">No events yet. Add one when a Quack Pack or WTA goes up.</div>'}
+      ${eventsCollapsed
+        ? `<div class="emini-list">${evs.length ? evs.map(miniHtml).join('') : '<div style="color:#748099;font-size:12.5px">No events yet.</div>'}</div>`
+        : (evs.length ? evs.map(rowHtml).join('') : '<div style="color:#748099;font-size:13px;padding:6px 0">No events yet. Add one when a Quack Pack or WTA goes up.</div>')}
     </div>`;
+  }
+  let eventsCollapsed = false;
+  try { eventsCollapsed = localStorage.getItem('ipoke.eventsCollapsed') === '1'; } catch {}
+  function toggleEventsCollapse(){
+    eventsCollapsed = !eventsCollapsed;
+    try { localStorage.setItem('ipoke.eventsCollapsed', eventsCollapsed?'1':'0'); } catch {}
+    renderEventsAdmin(true);
   }
   function srcShort(s){ const t=String(s||'').toLowerCase(); if(!t) return ''; return (t.includes('tiktok')||t==='tt')?'TT':'SF'; }
 

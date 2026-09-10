@@ -742,6 +742,85 @@ export class QueueEngine extends EventEmitter {
     return { batchKey };
   }
 
+  /** Put a slot ON HOLD: move it off the main queue into the held side-list
+   *  (e.g. the buyer isn't ready, or you want to rip it later). Held orders keep
+   *  their place in time and their reachedTopAt stamp, so returning one never
+   *  re-tallies the Vault. */
+  holdSlot(batchKey) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === batchKey && o.status === 'queued'
+    );
+    if (!orders.length) return null;
+    const buyerId = orders[0].buyerId;
+    const now = Date.now();
+    for (const o of orders) {
+      o.status = 'held';
+      o.heldAt = now;
+      o.bumped = false;
+    }
+    // Free the buyer's open slot so later orders don't merge into a held one.
+    if (this.openBatch.get(buyerId) === batchKey) this.openBatch.delete(buyerId);
+    this.preppedBatches.delete(batchKey);
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'held', batchKey, buyerId });
+    return { batchKey, buyerId };
+  }
+
+  /** Return a held slot to the main queue and bump it to the very top. */
+  unholdSlot(batchKey) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === batchKey && o.status === 'held'
+    );
+    if (!orders.length) return null;
+    const buyerId = orders[0].buyerId;
+    for (const o of orders) {
+      o.status = 'queued';
+      delete o.heldAt;
+    }
+    if (!this.openBatch.has(buyerId)) this.openBatch.set(buyerId, batchKey);
+    // Push it to the very top (clears any other bump).
+    for (const o of this.orders.values()) {
+      if (o.batchKey === batchKey && o.status === 'queued') o.bumped = true;
+      else if (o.bumped) o.bumped = false;
+    }
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'unheld', batchKey, buyerId });
+    return { batchKey, buyerId };
+  }
+
+  /** Condensed list of held slots for the admin side-panel (most-recent first). */
+  heldSlots() {
+    const byBatch = new Map();
+    for (const o of this.orders.values()) {
+      if (o.status !== 'held') continue;
+      if (!byBatch.has(o.batchKey)) byBatch.set(o.batchKey, []);
+      byBatch.get(o.batchKey).push(o);
+    }
+    const slots = [...byBatch.entries()].map(([key, orders]) => {
+      const first = orders[0];
+      return {
+        key,
+        buyerId: first.buyerId,
+        buyer: this._displayName(first.buyerId, first.buyer),
+        orderIds: orders.map((o) => o.id),
+        orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
+        total: orders.reduce((s, o) => s + (Number(o.total) || 0), 0),
+        sourceShort: (() => {
+          const s = new Set(orders.map((o) => String(o.source || '').toLowerCase()).filter(Boolean));
+          if (!s.size) return '';
+          if (s.size > 1) return 'MIX';
+          const only = [...s][0];
+          return only.includes('tiktok') || only === 'tt' ? 'TT' : 'SF';
+        })(),
+        heldAt: Math.max(...orders.map((o) => o.heldAt || 0)),
+      };
+    });
+    slots.sort((a, b) => (b.heldAt || 0) - (a.heldAt || 0));
+    return slots;
+  }
+
   /** Configure which item names/SKUs trigger priority. Recomputes existing orders. */
   setPriorityItems(list) {
     this.priorityItems = (list || [])
@@ -867,6 +946,7 @@ export class QueueEngine extends EventEmitter {
     return {
       activeCount: active.length,
       priorityCount: active.filter((e) => e.isPriority).length,
+      heldCount: this.heldSlots().length,
       fulfilledCount: done.length,
       activeValue: active.reduce((s, e) => s + e.total, 0),
       priorityItems: this.priorityItems,
@@ -881,6 +961,7 @@ export class QueueEngine extends EventEmitter {
   snapshot() {
     return {
       queue: this.activeQueue(),
+      held: this.heldSlots(),
       fulfilled: this.fulfilledSlots().slice(0, 50),
       cancelled: this.cancelledSlots().slice(0, 50),
       stats: this.stats(),

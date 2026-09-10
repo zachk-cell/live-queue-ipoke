@@ -427,5 +427,60 @@ await test("event fulfill: spot stays on admin (done), overlay drops it, no over
   assert.equal(eq2.entries.find((e) => e.id === firstId).fulfilled, true);
 });
 
+// ── Q. Vault never double-counts when bumped from top and returning ──────────
+await test("vault counter: does NOT re-count when a slot is bumped off the top and returns", async () => {
+  const q = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off', PRIORITY_ITEMS_EXTRA: 'vintage' });
+  q.setTrackedVariants([{ id: 'pe', label: 'Prismatic Evolutions', product: '', variant: 'Prismatic Evolutions' }]);
+  const t = Date.now();
+  // Vault order reaches the top → counts once.
+  q.upsertOrder(ord('v1', 'A', 'Amy', [{ name: 'Pokemon TCG:iPoke VAULT (Prismatic Evolutions) - 5 Packs (1 Vault)', variant: '5 Packs (1 Vault)', qty: 1 }], t));
+  assert.equal(q.snapshot().variants[0].count, 1, 'counted once on first reaching top');
+  // Priority order jumps above it → vault slot pushed down.
+  q.upsertOrder(ord('p1', 'B', 'Bob', [{ name: 'Vintage WOTC Holo (vintage)', qty: 1 }], t + 1000));
+  assert.equal(q.activeQueue()[0].buyerId, 'B', 'priority now at top');
+  assert.equal(q.snapshot().variants[0].count, 1, 'still 1 while bumped down');
+  // Fulfill the priority → vault slot returns to the top.
+  q.markFulfilled(q.activeQueue()[0].key);
+  assert.equal(q.activeQueue()[0].buyerId, 'A', 'vault slot back at top');
+  assert.equal(q.snapshot().variants[0].count, 1, 'STILL 1 — no double count on return to top');
+});
+
+// ── R. Hold / return-to-top: off the queue, into held, back to position 1 ─────
+await test("hold: moves a slot off the queue and returns it to the top", async () => {
+  const q = await makeEngine({ PERPETUAL: 'true', COMBINE_MODE: 'off' });
+  const t = Date.now();
+  q.upsertOrder(ord('o1', 'A', 'Amy', [{ name: 'Pack', qty: 1 }], t));
+  q.upsertOrder(ord('o2', 'B', 'Bob', [{ name: 'Pack', qty: 1 }], t + 1));
+  q.upsertOrder(ord('o3', 'C', 'Cal', [{ name: 'Pack', qty: 1 }], t + 2));
+  const bobKey = q.activeQueue().find((s) => s.buyerId === 'B').key;
+
+  assert.ok(q.holdSlot(bobKey), 'held Bob');
+  assert.equal(q.activeQueue().length, 2, 'Bob left the main queue');
+  assert.ok(!q.activeQueue().some((s) => s.buyerId === 'B'), 'Bob not in active queue');
+  assert.equal(q.stats().heldCount, 1, 'heldCount reflects it');
+  const held = q.heldSlots();
+  assert.equal(held.length, 1);
+  assert.equal(held[0].buyerId, 'B');
+  assert.ok(Array.isArray(held[0].orderNames) && held[0].orderNames.length === 1, 'held slot exposes order numbers');
+
+  assert.ok(q.unholdSlot(bobKey), 'returned Bob');
+  assert.equal(q.stats().heldCount, 0, 'no longer held');
+  assert.equal(q.activeQueue().length, 3, 'back in the main queue');
+  assert.equal(q.activeQueue()[0].buyerId, 'B', 'returned to the very top');
+
+  // Held state persists across a restart, and doesn't re-tally the Vault.
+  q.setTrackedVariants([{ id: 'pe', label: 'Prismatic Evolutions', product: '', variant: 'Prismatic Evolutions' }]);
+  q.upsertOrder(ord('o4', 'D', 'Dee', [{ name: 'Pokemon TCG:iPoke VAULT (Prismatic Evolutions) - 5 Packs (1 Vault)', variant: '5 Packs (1 Vault)', qty: 1 }], t + 3));
+  // Get Dee to the top so it tallies once, then hold + unhold her.
+  let g = 0; while (q.activeQueue()[0].buyerId !== 'D' && g++ < 10) q.markFulfilled(q.activeQueue()[0].key);
+  assert.equal(q.snapshot().variants[0].count, 1, 'vault counted once at top');
+  const deeKey = q.activeQueue().find((s) => s.buyerId === 'D').key;
+  q.holdSlot(deeKey); q.unholdSlot(deeKey);
+  assert.equal(q.snapshot().variants[0].count, 1, 'hold/return does NOT re-tally the vault');
+  const q2 = await makeEngine({ PERPETUAL: 'true' });
+  // (Dee was unheld before restart, so nothing should be held now.)
+  assert.equal(q2.stats().heldCount, 0, 'held state restored from disk');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
