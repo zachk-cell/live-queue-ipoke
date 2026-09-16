@@ -191,7 +191,14 @@ export function startShopifyPolling(queue) {
   // Perpetual: look back on boot to cover any redeploy gap. Non-perpetual: start
   // from now and re-anchor on go-live (matches the TikTok poller).
   let sinceMs = Date.now() - BOOT_LOOKBACK_MIN * 60 * 1000;
-  const seen = new Set();
+  // Within-window dedup, id -> order createdAt(ms). A perpetual (always-live)
+  // queue never re-anchors on Go Live, so a plain Set would grow for the entire
+  // life of the process (a slow memory creep over weeks of 24/7 uptime). We key
+  // by timestamp and drop ids that fall well behind the advancing query window —
+  // those orders can never be returned by the search again, so forgetting them
+  // is safe and keeps this bounded to roughly the last few minutes of activity.
+  const seen = new Map();
+  const SEEN_GRACE_MS = 10 * 60 * 1000; // keep ids until 10 min behind the window
 
   // For non-perpetual stores, each Go Live starts a fresh window.
   queue.on('change', (e) => {
@@ -216,7 +223,7 @@ export function startShopifyPolling(queue) {
       for (const node of fresh) {
         const norm = normalizeShopifyOrder(node);
         if (!norm || seen.has(norm.id)) continue;
-        seen.add(norm.id);
+        seen.set(norm.id, Date.parse(node.processedAt || node.createdAt) || Date.now());
         queue.upsertOrder(norm);
       }
       // Advance the watermark past the newest order we saw, so the window moves
@@ -224,6 +231,14 @@ export function startShopifyPolling(queue) {
       if (fresh.length) {
         const newest = Math.max(...fresh.map((n) => Date.parse(n.processedAt || n.createdAt) || 0));
         if (newest > sinceMs) sinceMs = newest;
+      }
+      // Bound the dedup map (perpetual queues run 24/7): forget ids whose orders
+      // are now more than SEEN_GRACE_MS behind the query floor (sinceMs - 30s).
+      // Those can't be returned by the search again, so this is safe and keeps
+      // memory flat no matter how long the process stays up.
+      if (seen.size > 1000) {
+        const floor = sinceMs - 30000 - SEEN_GRACE_MS;
+        for (const [id, ts] of seen) { if (ts < floor) seen.delete(id); }
       }
       // 2) Auto-remove orders cancelled/refunded on Shopify after they entered
       //    the queue. cancelOrder() is a no-op unless the order is queued.
