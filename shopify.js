@@ -36,14 +36,26 @@ const GQL_URL = () => `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`;
 
 // ---------------- GraphQL helper ----------------
 async function gql(query, variables = {}) {
-  const res = await fetch(GQL_URL(), {
-    method: 'POST',
-    headers: {
-      'X-Shopify-Access-Token': ADMIN_TOKEN,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+  // Transient network failures (DNS, connection reset, the generic "fetch
+  // failed") get a couple of quick retries with a short backoff before giving
+  // up, so a brief blip doesn't turn into a poll error or a missed order.
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(GQL_URL(), {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': ADMIN_TOKEN,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+      break;
+    } catch (e) {
+      if (attempt >= 2) throw e;
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
   const body = await res.json().catch(() => ({}));
   if (body.errors) {
     lastError = 'gql: ' + JSON.stringify(body.errors).slice(0, 300);
@@ -186,10 +198,15 @@ export function startShopifyPolling(queue) {
     if (!PERPETUAL && e && e.reason === 'go-live') { sinceMs = Date.now(); seen.clear(); }
   });
 
+  let polling = false;
   async function poll() {
     // Perpetual queues ingest regardless of live; others only while live.
     if (!shopifyEnabled()) return;
     if (!PERPETUAL && !queue.live) return;
+    // Overlap guard: if Shopify is slow and a cycle runs long, don't let the
+    // interval stack a second poll on top of it (compounding API load).
+    if (polling) { console.log('[shopify] poll: previous cycle still running — skipping this tick'); return; }
+    polling = true;
     try {
       const sinceIso = iso(sinceMs - 30000); // 30s overlap for safety
       // 1) New paid, unfulfilled orders → into the queue.
@@ -234,6 +251,8 @@ export function startShopifyPolling(queue) {
       }
     } catch (e) {
       console.error('[shopify] poll error:', e.message);
+    } finally {
+      polling = false;
     }
   }
 

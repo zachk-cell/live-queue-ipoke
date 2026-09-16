@@ -32,6 +32,20 @@ function srcShort(s) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 
+// --- Process-level safety nets ---------------------------------------------
+// A stray unhandled promise rejection or uncaught exception anywhere in the
+// process would otherwise take the whole queue down mid-stream. For a live
+// queue, staying up (and logging loudly) beats crashing: state is persisted to
+// disk and all ingest is idempotent, so continuing is safe. We log the full
+// stack so any recurring fault is diagnosable, but we do NOT exit — the queue
+// keeps running instead of dropping while a fresh instance boots.
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection:', reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err && err.stack ? err.stack : err);
+});
+
 // --- Auth config ---
 const PANEL_PASSWORD = process.env.PANEL_PASSWORD || 'changeme';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(24).toString('hex');

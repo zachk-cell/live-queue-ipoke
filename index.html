@@ -107,6 +107,8 @@
   .card textarea{width:100%;height:110px;background:var(--panel2);border:1px solid var(--line);color:var(--text);
     border-radius:9px;padding:10px;font-size:13px;font-family:inherit;resize:vertical}
   .row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+  .prichk{display:flex;align-items:center;gap:9px;margin-top:13px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none}
+  .prichk input{width:17px;height:17px;accent-color:var(--accent);cursor:pointer;flex:none}
   .ov-sec{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:12px}
   .ov-sec-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:14px}
   .ov-sec-h .ov-open{color:var(--accent);font-size:12px;text-decoration:none;font-weight:700}
@@ -124,6 +126,11 @@
   .ttbadge{font-size:10px;font-weight:800;letter-spacing:.4px;padding:3px 8px;border-radius:20px;vertical-align:middle;margin-left:4px}
   .ttbadge.ok{background:#0e2a44;color:#6fb3ff}
   .ttbadge.bad{background:#3a2020;color:#ff8b8b}
+  /* Live-feed connection indicator. Red + pulsing when the feed is down so a
+     stale (frozen) page is instantly obvious; calm green when connected. */
+  .conn{font-size:10px;font-weight:800;letter-spacing:.4px;padding:3px 8px;border-radius:20px;
+    vertical-align:middle;margin-left:4px;background:#3a2020;color:#ff8b8b;animation:pulse 1.3s ease-in-out infinite}
+  .conn.ok{background:#12331f;color:#43e08a;animation:none}
   .tt-banner a{color:#ffd7d7;font-weight:700}
   button.livebtn{background:var(--done);border-color:var(--done);color:#04180d;font-weight:800}
   button.livebtn.off{background:#c23b3b;border-color:#c23b3b;color:#fff}
@@ -286,7 +293,7 @@
 </head>
 <body>
 <header>
-  <h1><span id="dot" class="dot"></span>iPoke Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span id="ttStatus" class="ttbadge" style="display:none"></span></h1>
+  <h1><span id="dot" class="dot"></span>iPoke Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span id="ttStatus" class="ttbadge" style="display:none"></span> <span id="connDot" class="conn ok" title="Live feed connected">● Live feed</span></h1>
   <a href="/guide" target="_blank" class="hdr-link">📖 Guide ↗</a>
   <a id="ovBtn" href="javascript:void(0)" class="hdr-link" style="display:none" title="Scale, transparency & background for both OBS overlays — changes apply instantly." onclick="openOverlaySliders()">🎚 Overlay Sliders</a>
   <a href="{{ADMIN}}/logout" class="hdr-link hdr-logout">Log out</a>
@@ -360,6 +367,7 @@
     <h3>Priority items</h3>
     <p>Any order containing one of these (matched inside the item name or SKU) jumps to the top of the queue. One per line. Example: <em>break</em>, <em>slab</em>, <em>PSA 10</em>.</p>
     <textarea id="pri-input" placeholder="break&#10;slab&#10;box break"></textarea>
+    <label class="prichk"><input type="checkbox" id="pri-show-chips" onchange="togglePriChips()" checked> Show the active keyword chips on the admin page</label>
     <div class="row">
       <button class="ghost" onclick="closePriority()">Cancel</button>
       <button class="primary" onclick="savePriority()">Save</button>
@@ -461,10 +469,48 @@
 </div>
 
 <script>
-  const socket = io('/panel');
+  // Live-feed connection with explicit, never-give-up reconnection.
+  const socket = io('/panel', {
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 5000,
+    timeout: 20000,
+  });
   let state = { queue: [], fulfilled: [], stats: {}, config: { priorityItems: [] } };
 
-  socket.on('state', (s) => { state = s; render(); });
+  // ---- Live-feed resilience -------------------------------------------------
+  // If the socket feed silently drops (tab backgrounded, laptop asleep, wifi
+  // blip, instance recycle) the page would otherwise sit on stale data and look
+  // "frozen" while the server is actually fine. These handlers reconnect, pull a
+  // fresh snapshot the moment we're back, and show a clear status so a stale
+  // page is never mistaken for a live one.
+  let __lastState = Date.now();
+  function setConn(ok){
+    const el = document.getElementById('connDot');
+    if(!el) return;
+    el.className = 'conn' + (ok ? ' ok' : '');
+    el.textContent = ok ? '● Live feed' : '● Reconnecting…';
+    el.title = ok ? 'Live feed connected — orders update in real time.'
+                  : 'Live feed lost — trying to reconnect. Orders shown may be out of date until this turns green.';
+  }
+  async function resync(){
+    try{
+      const s = await fetch('/api/state', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+      if(s){ state = s; __lastState = Date.now(); render(); }
+    }catch(e){}
+  }
+  socket.on('state', (s) => { state = s; __lastState = Date.now(); setConn(true); render(); });
+  socket.on('connect', () => { setConn(true); resync(); });
+  socket.on('disconnect', () => { setConn(false); });
+  socket.io.on('reconnect', () => { setConn(true); resync(); });
+  socket.io.on('reconnect_attempt', () => { setConn(false); });
+  socket.on('connect_error', () => { setConn(false); });
+  function kick(){ try{ if(!socket.connected) socket.connect(); }catch(e){} resync(); }
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') kick(); });
+  window.addEventListener('online', kick);
+  window.addEventListener('focus', kick);
+  setInterval(() => { if(Date.now() - __lastState > 45000) kick(); }, 15000);
 
   function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
   function money(n){return '$'+Number(n||0).toFixed(2);}
@@ -621,8 +667,24 @@
       await post('/api/reset');
   }
 
+  // Show/hide the active priority-keyword chip row on the admin page. Preference
+  // is per-device (localStorage); default is shown. Toggling only affects the
+  // chip display — it never changes which keywords are active.
+  function applyPriChipsPref(){
+    let hidden = false;
+    try{ hidden = localStorage.getItem('adminPriChipsHidden') === '1'; }catch(e){}
+    const box = document.getElementById('pri-chips'); if(box) box.style.display = hidden ? 'none' : '';
+    const cb = document.getElementById('pri-show-chips'); if(cb) cb.checked = !hidden;
+  }
+  function togglePriChips(){
+    const cb = document.getElementById('pri-show-chips');
+    const hidden = cb ? !cb.checked : false;
+    try{ localStorage.setItem('adminPriChipsHidden', hidden ? '1' : '0'); }catch(e){}
+    const box = document.getElementById('pri-chips'); if(box) box.style.display = hidden ? 'none' : '';
+  }
   function openPriority(){
     document.getElementById('pri-input').value = (state.config.priorityItems||[]).join('\n');
+    applyPriChipsPref();
     document.getElementById('modal').classList.add('open');
   }
   function closePriority(){ document.getElementById('modal').classList.remove('open'); }
@@ -1064,6 +1126,7 @@
     if(chips._sig !== chipSig){
       chips._sig = chipSig;
       chips.innerHTML = (state.config.priorityItems||[]).map(p=>`<span class="chip">⭐ ${esc(p)}</span>`).join('');
+      applyPriChipsPref();
     }
 
     renderQueue();

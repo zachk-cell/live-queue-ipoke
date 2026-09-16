@@ -129,13 +129,26 @@
 
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
-  const socket = io('/overlay');
+  // Explicit, never-give-up reconnection so an on-stream overlay can't freeze on
+  // stale data if the feed drops. The server re-sends full state on every
+  // (re)connect, and we also force a reconnect when the tab/network returns.
+  const socket = io('/overlay', {
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 5000,
+    timeout: 20000,
+  });
   let state = { live:false, queue:[], event:null, stats:{}, overlays:{} };
   socket.on('state', (s)=>{
     state = s;
     applySettings(s.overlays && s.overlays.queue);
     render();
   });
+  function kick(){ try{ if(!socket.connected) socket.connect(); }catch(e){} }
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') kick(); });
+  window.addEventListener('online', kick);
+  window.addEventListener('focus', kick);
 
   function render(){
     const head = document.getElementById('head');

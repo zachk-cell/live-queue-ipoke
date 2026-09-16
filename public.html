@@ -78,9 +78,22 @@
 </main>
 <footer class="brand">Queue built by <a href="https://www.tiktok.com/@palmbeachcardco" target="_blank" rel="noopener noreferrer"><b>Palm Beach Card Co</b></a> (Zach Rips)</footer>
 <script>
-  const socket = io('/public');
+  // Live-feed connection with explicit, never-give-up reconnection so the public
+  // board can't get stuck on stale data if the feed drops. The server re-sends
+  // the full state on every (re)connect, so a reconnect is all we need to resync.
+  const socket = io('/public', {
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 5000,
+    timeout: 20000,
+  });
   let state = { queue: [], stats: {} };
   socket.on('state', (s) => { state = s; render(); });
+  function kick(){ try{ if(!socket.connected) socket.connect(); }catch(e){} }
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') kick(); });
+  window.addEventListener('online', kick);
+  window.addEventListener('focus', kick);
 
   function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
