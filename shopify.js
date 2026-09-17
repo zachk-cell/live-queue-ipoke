@@ -307,6 +307,13 @@ export function startShopifyPolling(queue) {
           }
         }
       }
+      // 4) Safety net: sweep any queued orders that match an open event into it.
+      //    Event routing happens at ingest, but an event created/edited after an
+      //    order landed would otherwise strand it in the main queue forever.
+      if (queue.sweepQueuedIntoEvents) {
+        const moved = queue.sweepQueuedIntoEvents();
+        if (moved) console.log(`[shopify] swept ${moved} queued order(s) into events`);
+      }
     } catch (e) {
       console.error('[shopify] poll error:', e.message);
     } finally {

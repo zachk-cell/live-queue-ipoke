@@ -658,6 +658,7 @@ export class QueueEngine extends EventEmitter {
             id: o.id,
             items: [...m.entries()].map(([name, qty]) => ({ name, qty })),
             addedSinceTop: !!o.mergedWhileTop,
+            createdAt: o.createdAt || null,
           };
         }),
       items,
@@ -1316,6 +1317,9 @@ export class QueueEngine extends EventEmitter {
     this.events.push(ev);
     this._persist();
     this.emit('change', { reason: 'event-add', eventId: ev.id });
+    // Immediately pull any orders already on the board that match this new event
+    // (no restart needed).
+    this.sweepQueuedIntoEvents();
     return ev;
   }
 
@@ -1330,7 +1334,47 @@ export class QueueEngine extends EventEmitter {
     if (patch.status != null && ['open', 'ripped'].includes(patch.status)) ev.status = patch.status;
     this._persist();
     this.emit('change', { reason: 'event-update', eventId: id });
+    // Edited keywords/spots/status may newly match queued orders — sweep them in.
+    this.sweepQueuedIntoEvents();
     return ev;
+  }
+
+  /** Re-scan queued main-queue orders and pull any items that now match an OPEN
+   *  event into that event's side-queue. Event routing otherwise only happens at
+   *  the moment an order is ingested, which strands orders that were already on
+   *  the board when an event is created or edited (and the idempotent poller
+   *  never re-checks them). Called on event add/update and each poll cycle, so a
+   *  matching order is never left in the main queue. Returns the number of
+   *  orders that had item(s) routed out. */
+  sweepQueuedIntoEvents() {
+    if (!this.events.length) return 0;
+    let moved = 0;
+    // Oldest first, so a limited-spot event fills in fair queue order.
+    const queued = [...this.orders.values()]
+      .filter((o) => o.status === 'queued')
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    for (const o of queued) {
+      const remaining = [];
+      let routeIdx = 0;
+      let routedAny = false;
+      for (const it of (o.items || [])) {
+        const ev = this._matchEvent(it);
+        if (ev) { this._addEventEntry(ev, it, o, `sweep${routeIdx++}`); routedAny = true; }
+        else remaining.push(it);
+      }
+      if (!routedAny) continue;
+      this.seenEventOrders.add(o.id);
+      if (remaining.length) {
+        o.items = remaining; // keep the non-event items as the main-queue slot
+      } else {
+        // Whole order became event spots — drop its main-queue slot.
+        this.orders.delete(o.id);
+        if (this.openBatch.get(o.buyerId) === o.batchKey) this.openBatch.delete(o.buyerId);
+      }
+      moved++;
+    }
+    if (moved) { this._persist(); this.emit('change', { reason: 'event-sweep', moved }); }
+    return moved;
   }
 
   removeEvent(id) {

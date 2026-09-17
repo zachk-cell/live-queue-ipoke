@@ -62,6 +62,9 @@
   .details .dgh:first-child{margin-top:0}
   .details .dsub{margin:9px 0 2px;font-size:11px;font-weight:800;letter-spacing:.4px;color:var(--done);text-transform:uppercase}
   .details .dord{color:var(--muted);font-size:11.5px;margin-top:9px;border-top:1px solid rgba(255,255,255,.06);padding-top:7px}
+  /* PST "ordered at" timestamp in the expanded view */
+  .details .dts{color:#748099;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+  .details .dts-solo{margin:2px 0 6px}
   .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:18px;width:34px;text-align:center;color:var(--muted)}
   .slot.priority .pos{color:var(--pri)}
   .who{flex:1;min-width:0}
@@ -192,7 +195,10 @@
   .vadd .vadd-btn:hover{filter:brightness(1.1)}
   .vadd .vadd-btn:disabled{opacity:.6;cursor:default}
   .vctl{display:flex;align-items:center;gap:6px}
-  .vrow input{width:58px;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:6px 8px;border-radius:8px;font-size:14px;text-align:center;font-variant-numeric:tabular-nums}
+  .vrow input{width:92px;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:6px 8px;border-radius:8px;font-size:14px;text-align:center;font-variant-numeric:tabular-nums}
+  /* Give big counts (1000+) room and keep the Save/Reset buttons from squeezing it. */
+  .vrow .vctl input{flex:1 1 auto;min-width:80px}
+  .vrow .vctl .vsave,.vrow .vctl .vreset{flex:none}
   .vrow .vsave{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
   .vrow .vsave.saved{background:#25c26e}
   .vrow .vreset{background:#2a1a1a;border:1px solid #5a2a2a;color:#ff9b9b;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;margin-left:auto}
@@ -518,6 +524,12 @@
   // ellipsis so it's clearly a partial. Full numbers stay in the expanded view,
   // the printed label, and the CSV export.
   function shortId(id){ const s=String(id); return s.length>8 ? '…'+s.slice(-8) : s; }
+  // Short-form date + time in Pacific for when an order came in (e.g. "9/17, 8:42 AM").
+  function fmtPST(ms){
+    if(!ms) return '';
+    try{ return new Date(Number(ms)).toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true}); }
+    catch(e){ return ''; }
+  }
   // Human duration from milliseconds: "0s", "45s", "2m 14s", "1h 03m".
   function fmtDur(ms){
     if(ms==null || isNaN(ms) || ms<0) return '—';
@@ -749,7 +761,13 @@
     const lines = e.orderLines || e.orderIds.map(id=>({id, items:e.items, addedSinceTop:false}));
     const multi = lines.length > 1;
     const itemRow = (i)=>`<div class="di"><span class="diq">${i.qty}×</span><span>${esc(i.name)}</span></div>`;
-    const groupHtml = (l)=> (multi?`<div class="dgh">#${esc(shortId(l.id))}</div>`:'') + (l.items||[]).map(itemRow).join('');
+    const groupHtml = (l)=>{
+      const ts = fmtPST(l.createdAt);
+      const head = multi
+        ? `<div class="dgh">#${esc(shortId(l.id))}${ts?` · <span class="dts">${esc(ts)} PST</span>`:''}</div>`
+        : (ts?`<div class="dts dts-solo">🕒 Ordered ${esc(ts)} PST</div>`:'');
+      return head + (l.items||[]).map(itemRow).join('');
+    };
     const base = lines.filter(l=>!l.addedSinceTop);
     const added = lines.filter(l=>l.addedSinceTop);
     let detailItems = base.map(groupHtml).join('');
