@@ -94,15 +94,16 @@ function buildPiggyMessage(queue) {
 // event is toggled "active" on the admin panel; it's removed automatically when
 // the event is un-toggled or ripped. Returns null when no event is active, which
 // tells refresh() to delete the message if one is currently up.
+// COMPACT events post: one line per open event (all WTAs & Quack Packs) with its
+// spot count only — no rosters, so the channel stays tight no matter how many
+// events run. The full buyer rosters live in a thread on this message (built by
+// buildEventRosters + the thread sync in refresh). Returns null when there are no
+// open events, which tells refresh() to remove the message (and its thread).
 function buildEventMessage(queue) {
   const snap = queue.snapshot();
-  // Show EVERY open event (all WTAs and Quack Packs), each with its spot count,
-  // not just the one toggled "active". Returns null only when there are no open
-  // events, which tells refresh() to remove the message.
   const events = (snap.events || []).filter((e) => e.status !== 'ripped');
   if (!events.length) return null;
-  const lines = ['**🎟 Events — Quack Packs & WTAs**  _(tap a roster to expand)_'];
-  const PER_EVENT_MAX = 30; // roster names hidden in the spoiler (they take no visible space)
+  const lines = ['**🎟 Events — Quack Packs & WTAs**'];
   for (const ev of events) {
     const type = ev.type === 'wta' ? 'WTA' : 'Quack';
     let count;
@@ -113,35 +114,43 @@ function buildEventMessage(queue) {
     } else {
       count = `${ev.spotsOrdered} spots ordered`;
     }
-    lines.push('');
-    // Always-visible one-line summary.
     lines.push(`\`${type}\` **${ev.title}** · ${count}`);
-    const entries = ev.entries || [];
-    if (!entries.length) { lines.push('_No spots yet._'); continue; }
-    // Build the roster and tuck it inside a Discord spoiler so it stays collapsed
-    // (click-to-reveal) — the names take no visible space until expanded.
-    const rosterLines = [];
-    let shown = 0;
-    for (const e of entries) {
-      if (shown >= PER_EVENT_MAX) break;
-      const sp = e.spots > 1 ? ` ×${e.spots}` : '';
-      rosterLines.push(`\`${String(e.position).padStart(2)}\` ${e.buyer}${sp}`);
-      shown++;
-    }
-    if (entries.length > shown) rosterLines.push(`…and ${entries.length - shown} more`);
-    const spoiler = `||${rosterLines.join('\n')}||`;
-    // Keep the whole message under Discord's limit; if a roster would overflow,
-    // hide it behind a note instead so the summary lines still post.
-    if ((lines.join('\n').length + spoiler.length + 1) > CHAR_BUDGET) {
-      lines.push(`_${entries.length} spot${entries.length === 1 ? '' : 's'} — roster hidden to save space_`);
-      break;
-    }
-    lines.push(spoiler);
   }
   lines.push('');
-  lines.push('_Rosters are collapsed — tap to reveal. Pulled in purchase order; details private._');
+  lines.push('_↳ Full rosters are in the thread on this message._');
   lines.push(`_Updated <t:${Math.floor(Date.now() / 1000)}:R>_`);
   return lines.join('\n');
+}
+
+// Full rosters for the thread, returned as an array of message chunks each kept
+// under Discord's 2000-char limit (split on line boundaries). Empty array when
+// there are no open events.
+function buildEventRosters(queue) {
+  const snap = queue.snapshot();
+  const events = (snap.events || []).filter((e) => e.status !== 'ripped');
+  if (!events.length) return [];
+  const out = [];
+  for (const ev of events) {
+    const type = ev.type === 'wta' ? 'WTA' : 'Quack';
+    out.push(`\`${type}\` **${ev.title}** — ${ev.spotsOrdered}${ev.totalSpots > 0 ? '/' + ev.totalSpots : ''} spots`);
+    const entries = ev.entries || [];
+    if (!entries.length) out.push('_No spots yet._');
+    else for (const e of entries) {
+      const sp = e.spots > 1 ? ` ×${e.spots}` : '';
+      out.push(`\`${String(e.position).padStart(2)}\` ${e.buyer}${sp}`);
+    }
+    out.push(''); // spacer between events
+  }
+  const MAX = 1900;
+  const chunks = [];
+  let cur = '';
+  for (const line of out) {
+    const add = (cur ? '\n' : '') + line;
+    if (cur && (cur.length + add.length) > MAX) { chunks.push(cur); cur = line; }
+    else cur += add;
+  }
+  if (cur.trim()) chunks.push(cur);
+  return chunks;
 }
 
 export async function startDiscord(queue) {
@@ -154,7 +163,9 @@ export async function startDiscord(queue) {
   const channelId = process.env.DISCORD_CHANNEL_ID;
   let liveMessage = null;
   let pigMessage = null;
-  let eventMessage = null; // iPoke: the active event's side-queue post (or none)
+  let eventMessage = null; // iPoke: the compact events post (counts only), or none
+  let eventThread = null;  // the thread on eventMessage that holds the full rosters
+  let eventThreadMsgs = []; // roster message(s) inside that thread, in order
   let dirty = false;
 
   const commands = [
@@ -211,6 +222,42 @@ export async function startDiscord(queue) {
     }
   });
 
+  // Keep the roster thread (on eventMessage) in sync with the current rosters.
+  // The compact events message stays in the channel; the full rosters live here,
+  // collapsed to a single line under the message and expandable on click. Any
+  // permission/thread hiccup is caught so it can never break the main posts.
+  async function syncEventThread() {
+    if (!eventMessage) { eventThread = null; eventThreadMsgs = []; return; }
+    const chunks = buildEventRosters(queue);
+    try {
+      if (!chunks.length) {
+        for (const m of eventThreadMsgs) { try { await m.delete(); } catch {} }
+        eventThreadMsgs = [];
+        return;
+      }
+      if (!eventThread) {
+        eventThread = eventMessage.thread
+          || await eventMessage.startThread({ name: '📋 Event rosters', autoArchiveDuration: 1440 });
+        eventThreadMsgs = [];
+      }
+      if (eventThread.archived) { try { await eventThread.setArchived(false); } catch {} }
+      for (let i = 0; i < chunks.length; i++) {
+        if (eventThreadMsgs[i]) {
+          try { await eventThreadMsgs[i].edit(chunks[i]); }
+          catch { try { eventThreadMsgs[i] = await eventThread.send(chunks[i]); } catch {} }
+        } else {
+          try { eventThreadMsgs[i] = await eventThread.send(chunks[i]); } catch {}
+        }
+      }
+      while (eventThreadMsgs.length > chunks.length) {
+        const m = eventThreadMsgs.pop();
+        try { await m.delete(); } catch {}
+      }
+    } catch (e) {
+      console.warn('[discord] event roster thread sync failed:', e.message);
+    }
+  }
+
   async function refresh(force = false) {
     if (!channelId) return;
     if (!force && !dirty) return;
@@ -233,6 +280,8 @@ export async function startDiscord(queue) {
         } catch {}
         pigMessage = null;
         eventMessage = null;
+        eventThread = null;
+        eventThreadMsgs = [];
         // Post the Piggy Bank tracker first so it sits ABOVE the queue message.
         if (pigContent) {
           pigMessage = await channel.send(pigContent);
@@ -240,10 +289,12 @@ export async function startDiscord(queue) {
         }
         liveMessage = await channel.send(queueContent);
         try { await liveMessage.pin(); } catch {}
-        // An event that's already active on boot gets its own pinned post below.
+        // An event that's already active on boot gets its own pinned post below,
+        // with the full rosters in a thread on it.
         if (eventContent) {
           eventMessage = await channel.send(eventContent);
           try { await eventMessage.pin(); } catch {}
+          await syncEventThread();
         }
       } else {
         await liveMessage.edit(queueContent);
@@ -260,15 +311,21 @@ export async function startDiscord(queue) {
         // stays active, and delete when it's un-toggled or ripped.
         if (eventContent) {
           if (eventMessage) {
-            try { await eventMessage.edit(eventContent); } catch { eventMessage = null; }
-          } else {
+            try { await eventMessage.edit(eventContent); } catch { eventMessage = null; eventThread = null; eventThreadMsgs = []; }
+          }
+          if (!eventMessage) {
             eventMessage = await channel.send(eventContent);
             try { await eventMessage.pin(); } catch {}
+            eventThread = null; eventThreadMsgs = [];
           }
+          await syncEventThread();
         } else if (eventMessage) {
+          // Deleting the parent message also removes its thread (and rosters).
           try { await eventMessage.unpin(); } catch {}
           try { await eventMessage.delete(); } catch {}
           eventMessage = null;
+          eventThread = null;
+          eventThreadMsgs = [];
         }
       }
     } catch (e) {
@@ -276,6 +333,8 @@ export async function startDiscord(queue) {
       liveMessage = null;
       pigMessage = null;
       eventMessage = null;
+      eventThread = null;
+      eventThreadMsgs = [];
     }
   }
 
