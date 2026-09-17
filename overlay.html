@@ -88,9 +88,11 @@
      instead of showing a static top-N with a "+N more" line. The panel fills
      the full overlay height so there's a viewport to scroll within, the list
      becomes that clipped viewport, and a duplicated track glides upward. */
-  body.reel #wrap{height:auto}
-  body.reel .panel{height:100%}
-  body.reel .list{flex:1 1 auto;min-height:0;display:block;position:relative;overflow:hidden;
+  /* The list becomes a fixed-height clipped window (its height is set inline in
+     JS to fit ~N rows) and the track glides within it. The panel sizes to the
+     header + that window, so the overlay is only as tall as the visible rows —
+     not the full screen — while still rolling through the entire queue. */
+  body.reel .list{display:block;position:relative;overflow:hidden;box-sizing:border-box;
     /* soft fade at the top & bottom edges so rows ease in/out rather than pop */
     -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 22px,#000 calc(100% - 22px),transparent 100%);
     mask-image:linear-gradient(to bottom,transparent 0,#000 22px,#000 calc(100% - 22px),transparent 100%)}
@@ -119,7 +121,9 @@
   // Reel mode: slowly auto-scroll through the WHOLE queue, looping. Enable with
   // ?reel=1. ?speed= sets the roll speed in pixels/second (default 26).
   const REEL = ['1','true','yes','on'].includes(String(params.get('reel')||'').toLowerCase());
-  const REEL_SPEED = Math.max(4, Math.min(Number(params.get('speed')) || 26, 300));
+  // Roll speed (px/sec). Starts from ?speed= (default 26) but is updated live by
+  // the admin Overlay Sliders popup, so mods can tune it mid-stream.
+  let reelSpeed = Math.max(2, Math.min(Number(params.get('speed')) || 26, 200));
   const wrap = document.getElementById('wrap');
   wrap.className = SIDE;
   if(REEL) document.body.classList.add('reel');
@@ -135,6 +139,8 @@
     const panel = s.panel !== false;
     const op = clamp01(Number(s.opacity) || 0);
     const scale = clampScale(Number(s.scale) || 1);
+    // Live reel speed from the admin slider (falls back to the URL/default).
+    if (s.speed != null && Number.isFinite(Number(s.speed))) reelSpeed = Math.max(2, Math.min(200, Number(s.speed)));
     document.documentElement.style.setProperty('--bg-alpha', panel ? op : 0);
     const p = document.getElementById('panel');
     if(p){
@@ -185,7 +191,7 @@
       meta.innerHTML = '';
       moreEl.textContent = '';
       dot.style.background = '#ff5d5d'; dot.style.boxShadow='0 0 10px #ff5d5d';
-      list.classList.remove('reeling'); reelSig=''; // drop any reel track
+      list.classList.remove('reeling'); reelSig=''; list.style.height=''; // drop any reel track
       list.innerHTML = '<div class="off">Queue is closed.</div>';
       return;
     }
@@ -208,7 +214,7 @@
                   : `${ev.spotsOrdered}/${ev.totalSpots} spots · <span class="rem">${ev.spotsRemaining} left</span>`)
               : `${ev.spotsOrdered} spots ordered`)
           + `</div>`;
-      list.classList.remove('reeling'); reelSig=''; // event view isn't a reel
+      list.classList.remove('reeling'); reelSig=''; list.style.height=''; // event view isn't a reel
       const rows = ev.entries.slice(0, ROWS);
       list.innerHTML = rows.length ? rows.map((e,i)=>`
         <div class="row${i===0?' top':''}">
@@ -232,7 +238,7 @@
       // Reel mode: render EVERYONE and let the track auto-scroll. No slicing,
       // no "+N more".
       moreEl.textContent = '';
-      if(!q.length){ stopReel(); list.classList.remove('reeling'); list.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>'; return; }
+      if(!q.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>'; return; }
       renderReel(q);
       return;
     }
@@ -277,11 +283,27 @@
       const copy = q.map(e=>rowHtml(e, e.position===1)).join('');
       // Two copies for the seamless wrap.
       list.innerHTML = `<div class="reel-track" id="reelTrack">${copy}${copy}</div>`;
+      sizeReelWindow(q.length); // cap the visible height to ~ROWS rows
       measureReel();
       // Keep the scroll position sensible across rebuilds.
       if(reelCopyH>0) reelOffset = reelOffset % reelCopyH; else reelOffset = 0;
     }
     startReel();
+  }
+
+  // Cap the reel window to show about ROWS rows at a time (default 12), so the
+  // overlay stays a compact panel instead of stretching down the whole screen.
+  // A shorter queue shrinks to fit (never taller than it needs to be).
+  function sizeReelWindow(qLen){
+    const list = document.getElementById('list');
+    const track = document.getElementById('reelTrack');
+    if(!list || !track) return;
+    const firstRow = track.querySelector('.row');
+    const rowH = firstRow ? firstRow.getBoundingClientRect().height : 44;
+    const gap = 6;               // matches .reel-track gap
+    const padY = 8 + 12;         // .list top + bottom padding
+    const visible = Math.max(1, Math.min(ROWS, qLen));
+    list.style.height = Math.round(visible*rowH + (visible-1)*gap + padY) + 'px';
   }
 
   function measureReel(){
@@ -304,7 +326,7 @@
     if(!reelLastTs){ reelLastTs = ts; }
     const dt = Math.min(0.1, (ts - reelLastTs) / 1000); // clamp to avoid jumps after a tab stall
     reelLastTs = ts;
-    reelOffset += REEL_SPEED * dt;
+    reelOffset += reelSpeed * dt;
     if(reelOffset >= reelCopyH) reelOffset -= reelCopyH;
     track.style.transform = `translateY(${-reelOffset}px)`;
   }

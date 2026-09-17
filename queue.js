@@ -95,8 +95,8 @@ export class QueueEngine extends EventEmitter {
     // the Vault (pack-count) board. opacity 0..1 (background), scale 0.5..3,
     // panel = show background + border (single toggle).
     this.overlays = {
-      queue: { opacity: 0, scale: 1, panel: true },
-      vault: { opacity: 0, scale: 1, panel: true },
+      queue: { opacity: 0, scale: 1, panel: true, speed: 26 },
+      vault: { opacity: 0, scale: 1, panel: true, speed: 26 },
     };
     // Pacific-day marker for the daily "Past Days" rollover.
     this.lastRolloverDay = null;
@@ -1224,6 +1224,9 @@ export class QueueEngine extends EventEmitter {
     if (patch.opacity != null && Number.isFinite(Number(patch.opacity))) s.opacity = Math.max(0, Math.min(1, Number(patch.opacity)));
     if (patch.scale != null && Number.isFinite(Number(patch.scale))) s.scale = Math.max(0.5, Math.min(3, Number(patch.scale)));
     if (patch.panel != null) s.panel = !!patch.panel;
+    // Reel auto-scroll speed (px/sec) — only meaningful for the queue overlay in
+    // ?reel=1 mode, but stored generically so the admin slider can push it live.
+    if (patch.speed != null && Number.isFinite(Number(patch.speed))) s.speed = Math.max(2, Math.min(200, Number(patch.speed)));
     this._persist();
     this.emit('change', { reason: 'overlay-setting', which });
     return true;

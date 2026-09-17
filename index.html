@@ -115,6 +115,8 @@
   .ov-sec{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:12px}
   .ov-sec-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:14px}
   .ov-sec-h .ov-open{color:var(--accent);font-size:12px;text-decoration:none;font-weight:700}
+  .ov-sec-h .ov-links{display:inline-flex;gap:12px}
+  .ov-sec .ov-hint{color:var(--muted);font-size:11px;margin:4px 0 2px;line-height:1.35}
   .ov-sec label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
   .ov-sec label:first-of-type{margin-top:0}
   .ov-sec .ov-val{color:var(--pri);font-weight:800;float:right;font-variant-numeric:tabular-nums}
@@ -226,9 +228,21 @@
   .selb{background:transparent;color:var(--muted);border:1px solid var(--line);padding:6px 8px;font-size:13px;line-height:1;flex:none}
   .slot.selected{outline:2px solid var(--pri)}
   .slot.selected .selb{background:var(--pri);color:#2a1e00;border-color:var(--pri)}
-  /* Same-name candidates while a combine selection is active (#35) */
-  .slot.name-match{outline:2px dashed var(--accent);outline-offset:-2px;background:linear-gradient(90deg,rgba(90,160,255,.10),var(--panel))}
-  .slot.name-match .selb{border-color:var(--accent);color:var(--accent)}
+  /* Same-name candidates while a combine selection is active (#35).
+     Made deliberately loud — a bright blue glow + gentle pulse — so matching
+     orders jump out from the rest of the board the instant a slot is picked. */
+  .slot.name-match{outline:3px solid var(--accent);outline-offset:-1px;
+    background:linear-gradient(90deg,rgba(79,140,255,.28),var(--panel));
+    box-shadow:0 0 0 2px rgba(79,140,255,.55) inset, 0 0 16px rgba(79,140,255,.5);
+    animation:nmpulse 1.25s ease-in-out infinite}
+  @keyframes nmpulse{
+    0%,100%{box-shadow:0 0 0 2px rgba(79,140,255,.45) inset, 0 0 10px rgba(79,140,255,.30)}
+    50%{box-shadow:0 0 0 3px rgba(79,140,255,.85) inset, 0 0 22px rgba(79,140,255,.65)}}
+  .slot.name-match .selb{border-color:var(--accent);color:var(--accent);background:rgba(79,140,255,.18)}
+  /* A small "same name — click to add" hint chip on each candidate. */
+  .slot.name-match .nm-hint{display:inline-flex}
+  .nm-hint{display:none;align-items:center;gap:4px;margin-left:8px;padding:2px 8px;border-radius:999px;
+    font-size:11px;font-weight:800;letter-spacing:.2px;color:#0b1020;background:var(--accent);white-space:nowrap}
   .combine-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:25;
     background:var(--panel);border:1px solid var(--pri);border-radius:12px;padding:10px 14px;
     display:none;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
@@ -391,11 +405,14 @@
     <p style="margin-bottom:14px">Scale, background transparency, and background/border for each OBS overlay. Changes apply <b>instantly</b> — the text always stays solid and readable.</p>
 
     <div class="ov-sec">
-      <div class="ov-sec-h"><b>Overlay 1 — Queue</b> <a href="/overlay" target="_blank" class="ov-open">open ↗</a></div>
+      <div class="ov-sec-h"><b>Overlay 1 — Queue</b> <span class="ov-links"><a href="/overlay" target="_blank" class="ov-open">open ↗</a> <a href="/overlay?reel=1" target="_blank" class="ov-open">reel ↗</a></span></div>
       <label>Scale <span id="ov-queue-scaleVal" class="ov-val">100%</span></label>
       <input id="ov-queue-scale" type="range" min="50" max="200" step="1" value="100" />
       <label>Background transparency <span id="ov-queue-opVal" class="ov-val">0%</span></label>
       <input id="ov-queue-op" type="range" min="0" max="100" step="1" value="0" />
+      <label>Reel scroll speed <span id="ov-queue-speedVal" class="ov-val">26 px/s</span></label>
+      <input id="ov-queue-speed" type="range" min="4" max="120" step="1" value="26" />
+      <div class="ov-hint">Only affects the reel overlay (the “reel ↗” link). Higher = faster roll.</div>
       <label class="ov-check"><input id="ov-queue-panel" type="checkbox" checked /> Show background &amp; border</label>
     </div>
 
@@ -799,7 +816,7 @@
     return `<div class="slotmain">`
       + `<button class="removeb" title="Remove from queue (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`
       + `<div class="pos">${e.position}</div>`
-      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${idTag} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos}</div>`
+      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${idTag} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
       + `<div class="items">${esc(itemStr)}</div>`
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
@@ -1449,6 +1466,8 @@
       if(sc && document.activeElement !== sc){ sc.value = Math.round(scale*100); document.getElementById('ov-'+k+'-scaleVal').textContent = Math.round(scale*100)+'%'; }
       if(tr && document.activeElement !== tr){ tr.value = op; document.getElementById('ov-'+k+'-opVal').textContent = op+'%'; }
       if(cb){ cb.checked = panel; }
+      const sp = document.getElementById('ov-'+k+'-speed');
+      if(sp && document.activeElement !== sp){ const spv = s.speed!=null?Math.round(Number(s.speed)):26; sp.value = spv; document.getElementById('ov-'+k+'-speedVal').textContent = spv+' px/s'; }
     }
   }
 
@@ -1457,9 +1476,12 @@
     const scale = Number(document.getElementById('ov-'+k+'-scale').value)/100;
     const opacity = Number(document.getElementById('ov-'+k+'-op').value)/100;
     const panel = document.getElementById('ov-'+k+'-panel').checked;
+    const patch = { which: k, scale, opacity, panel };
+    const spEl = document.getElementById('ov-'+k+'-speed');
+    if(spEl) patch.speed = Number(spEl.value);
     clearTimeout(_ovSend[k]);
     _ovSend[k] = setTimeout(() => {
-      postJSON('/api/overlay-setting', { which: k, scale, opacity, panel });
+      postJSON('/api/overlay-setting', patch);
     }, 90);
   }
 
@@ -1472,6 +1494,8 @@
       sc.addEventListener('input', () => { document.getElementById('ov-'+k+'-scaleVal').textContent = sc.value+'%'; pushOverlay(k); });
       tr.addEventListener('input', () => { document.getElementById('ov-'+k+'-opVal').textContent = tr.value+'%'; pushOverlay(k); });
       cb.addEventListener('change', () => pushOverlay(k));
+      const sp = document.getElementById('ov-'+k+'-speed');
+      if(sp) sp.addEventListener('input', () => { document.getElementById('ov-'+k+'-speedVal').textContent = sp.value+' px/s'; pushOverlay(k); });
     }
     const modal = document.getElementById('ovModal');
     if(modal) modal.addEventListener('click', (e)=>{ if(e.target === modal) closeOverlaySliders(); });
