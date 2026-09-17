@@ -6,16 +6,23 @@
 // native Shopify-web orders funnel into one Shopify store — so Shopify is the
 // single complete source and we don't call TikTok's API at all.
 //
-// Auth: an admin-created CUSTOM APP on the store, with an Admin API access token
-// (read_orders + read_customers) and "Protected Customer Data" access enabled.
-// We only ever read; we never write/fulfill (in-app "fulfilled" is just queue
-// management, same as the TikTok side).
+// Auth: a Dev Dashboard app (Client ID + Client Secret) in the SAME Shopify
+// organization as the store. Shopify retired the old admin-created custom apps
+// with permanent shpat_ tokens, so we now exchange the client id/secret for a
+// short-lived (24h) Admin API access token via the client-credentials grant,
+// cache it, and refresh it before expiry. Scopes (read_orders + read_customers,
+// plus Protected Customer Data access) are configured on the app in the Dev
+// Dashboard. For back-compat, a legacy static SHOPIFY_ADMIN_TOKEN — if one is
+// set — is still used as-is. We only ever read; we never write/fulfill (in-app
+// "fulfilled" is just queue management, same as the TikTok side).
 //
 // Ingest by POLLING the GraphQL Admin API. For iPoke the queue is PERPETUAL, so
 // unlike the TikTok poller we do NOT gate on a live window — orders flow in 24/7.
 
 const SHOP = (process.env.SHOPIFY_SHOP || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-const ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN || '';
+const ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN || ''; // legacy static token (optional)
+const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID || '';
+const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || '';
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
 const POLL_MS = Number(process.env.SHOPIFY_POLL_MS) || 10000;
 // Perpetual queues look back this far on boot so a redeploy gap doesn't drop
@@ -29,40 +36,76 @@ const PERPETUAL = String(process.env.PERPETUAL || '').toLowerCase() === 'true';
 let lastError = '';
 
 export function shopifyEnabled() {
-  return process.env.SHOPIFY_ENABLED === 'true' && !!SHOP && !!ADMIN_TOKEN;
+  return process.env.SHOPIFY_ENABLED === 'true' && !!SHOP
+    && (!!ADMIN_TOKEN || (!!CLIENT_ID && !!CLIENT_SECRET));
 }
 
 const GQL_URL = () => `https://${SHOP}/admin/api/${API_VERSION}/graphql.json`;
+
+// ---------------- Access token (client-credentials grant) ----------------
+// Cached short-lived token. A legacy static token never expires (exp = Infinity).
+let _token = { value: ADMIN_TOKEN, exp: ADMIN_TOKEN ? Infinity : 0 };
+async function getAccessToken(force = false) {
+  if (ADMIN_TOKEN) return ADMIN_TOKEN; // legacy path: use the static token as-is
+  const now = Date.now();
+  // Reuse the cached token until ~2 min before it expires.
+  if (!force && _token.value && now < _token.exp - 120000) return _token.value;
+  if (!CLIENT_ID || !CLIENT_SECRET) throw new Error('shopify: no SHOPIFY_CLIENT_ID/SECRET (or SHOPIFY_ADMIN_TOKEN) set');
+  const res = await fetch(`https://${SHOP}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+    }).toString(),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) {
+    lastError = 'token exchange failed: ' + (body.error_description || body.error || ('HTTP ' + res.status));
+    throw new Error(lastError);
+  }
+  _token = { value: body.access_token, exp: now + (Number(body.expires_in) || 86399) * 1000 };
+  console.log('[shopify] access token refreshed (client credentials); valid ~', Math.round((_token.exp - now) / 60000), 'min');
+  return _token.value;
+}
 
 // ---------------- GraphQL helper ----------------
 async function gql(query, variables = {}) {
   // Transient network failures (DNS, connection reset, the generic "fetch
   // failed") get a couple of quick retries with a short backoff before giving
   // up, so a brief blip doesn't turn into a poll error or a missed order.
-  let res;
+  // On a 401 (token expired/revoked) we force one token refresh and retry.
+  let triedRefresh = false;
   for (let attempt = 0; ; attempt++) {
+    let res;
     try {
+      const token = await getAccessToken(triedRefresh);
       res = await fetch(GQL_URL(), {
         method: 'POST',
         headers: {
-          'X-Shopify-Access-Token': ADMIN_TOKEN,
+          'X-Shopify-Access-Token': token,
           'content-type': 'application/json',
         },
         body: JSON.stringify({ query, variables }),
       });
-      break;
     } catch (e) {
       if (attempt >= 2) throw e;
       await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      continue;
     }
+    if (res.status === 401 && !triedRefresh && !ADMIN_TOKEN) {
+      triedRefresh = true; // token likely expired/revoked — refresh once and retry
+      continue;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (body.errors) {
+      lastError = 'gql: ' + JSON.stringify(body.errors).slice(0, 300);
+      throw new Error(lastError);
+    }
+    lastError = '';
+    return body.data;
   }
-  const body = await res.json().catch(() => ({}));
-  if (body.errors) {
-    lastError = 'gql: ' + JSON.stringify(body.errors).slice(0, 300);
-    throw new Error(lastError);
-  }
-  lastError = '';
-  return body.data;
 }
 
 // ---------------- Normalization ----------------
@@ -278,9 +321,13 @@ export function startShopifyPolling(queue) {
 
 // ---------------- Status + diagnostics ----------------
 export function shopifyStatus() {
+  const authMode = ADMIN_TOKEN ? 'static-token' : ((CLIENT_ID && CLIENT_SECRET) ? 'client-credentials' : 'none');
   return {
     enabled: shopifyEnabled(),
-    connected: !!(SHOP && ADMIN_TOKEN),
+    connected: !!(SHOP && (ADMIN_TOKEN || (CLIENT_ID && CLIENT_SECRET))),
+    authMode,
+    // For client-credentials: whether we currently hold a live (unexpired) token.
+    hasLiveToken: ADMIN_TOKEN ? true : !!(_token.value && Date.now() < _token.exp),
     shop: SHOP || '',
     apiVersion: API_VERSION,
     perpetual: PERPETUAL,
