@@ -333,7 +333,7 @@
 <main>
   <div class="toolbar">
     <button id="liveBtn" class="livebtn" onclick="toggleLive()">● Go Live</button>
-    <input id="search" placeholder="Filter by buyer…" oninput="render()" />
+    <input id="search" placeholder="Search buyer or order # (full or last digits)…" oninput="render()" />
     <button class="ghost" onclick="openPriority()">⭐ Priority items</button>
     <button class="ghost" onclick="resetQueue()">Reset</button>
     <a href="{{ADMIN}}/history" style="text-decoration:none"><button class="ghost">🗂 Past Days ↗</button></a>
@@ -872,13 +872,19 @@
       + `<button ${queuePage>=pages?'disabled':''} onclick="queueGoPage(${queuePage+1})">Next ›</button>`;
   }
   function renderQueue(){
-    const filter = (document.getElementById('search').value||'').toLowerCase();
+    const filter = (document.getElementById('search').value||'').toLowerCase().trim();
+    // For order-number search, compare on an alphanumeric-only form so a partial
+    // like the last 6 digits matches regardless of a leading "#" or spaces.
+    const fAlnum = filter.replace(/[^a-z0-9]/g,'');
+    const matchOrderNo = (e) => fAlnum && (e.orderIds||[]).some(id =>
+      String(id).toLowerCase().replace(/[^a-z0-9]/g,'').includes(fAlnum));
     // Detect buyers who share an identical display name with ANOTHER buyer in
     // the queue (different people, same TikTok name). Count over the WHOLE queue
     // so a search filter never hides a duplicate. (#4)
     const nameCounts = {};
     for(const e of (state.queue||[])){ const n=(e.buyer||'').toLowerCase(); nameCounts[n]=(nameCounts[n]||0)+1; }
-    const list = (state.queue||[]).filter(e=>!filter || e.buyer.toLowerCase().includes(filter));
+    // Search matches buyer name OR a whole/partial order number.
+    const list = (state.queue||[]).filter(e=>!filter || e.buyer.toLowerCase().includes(filter) || matchOrderNo(e));
     for(const e of list){
       e._dupName = nameCounts[(e.buyer||'').toLowerCase()]>1;
       e._idTag = e._dupName ? String(e.buyerId||'').slice(-4) : '';
