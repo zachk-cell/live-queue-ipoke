@@ -18,8 +18,13 @@
     /* Background opacity of the whole panel. 0 = fully transparent (default);
        raised by the slider or the ?opacity= URL param. */
     --bg-alpha:0;
-    --card:rgba(16,19,26, calc(var(--bg-alpha) * 0.9));
-    --line:rgba(255,255,255, calc(var(--bg-alpha) * 0.12));
+    /* Panel background: a soft royal-purple → deep-indigo diagonal wash. Opacity
+       is driven by --bg-alpha (the admin "Background transparency" slider), so it
+       fades all the way to clear at 0 and reads like the reference at ~0.9. */
+    --card:linear-gradient(157deg,
+      rgba(104,84,206, calc(var(--bg-alpha) * 0.92)),
+      rgba(58,44,138, calc(var(--bg-alpha) * 0.94)));
+    --line:rgba(255,255,255, calc(var(--bg-alpha) * 0.16));
     --text:#ffffff; --muted:#c2c9d6;
     /* Solid dark outline so white text stays readable over ANY background
        (dark video, bright video, or a plain white page) — independent of the
@@ -55,12 +60,12 @@
   .evt-spots .rem{color:var(--pri)} .evt-spots .full{color:var(--done)}
   .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
-    background:rgba(255,255,255, calc(0.045 + var(--bg-alpha) * 0.05))}
-  /* Soft zebra: alternate rows get a gentle cool tint so each name separates
-     cleanly, even over video at full panel transparency. Keyed off queue
-     position (added in JS), not DOM order, so the stripes stay stable as the
-     reel loops. Top/priority highlights are defined AFTER this and win. */
-  .row.alt{background:rgba(120,150,230, calc(0.14 + var(--bg-alpha) * 0.10))}
+    background:rgba(255,255,255, calc(0.03 + var(--bg-alpha) * 0.04))}
+  /* Soft zebra: alternate rows get a gentle lighter overlay so each name
+     separates cleanly — a white tint reads well over both the purple panel and
+     bare video. Keyed off queue position (added in JS), not DOM order, so the
+     stripes stay stable as the reel loops. Top/priority highlights win (below). */
+  .row.alt{background:rgba(255,255,255, calc(0.11 + var(--bg-alpha) * 0.10))}
   /* Top + priority rows keep a faint highlight even at full transparency so the
      next-up slot still reads over video. */
   .row.top{background:linear-gradient(90deg,rgba(79,140,255, calc(0.14 + var(--bg-alpha) * 0.22)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)));

@@ -79,8 +79,8 @@
   .badge.reorder{background:var(--done);color:#04180d;animation:pulse 1.3s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
   .badge.samename{background:#4a2c00;color:#ffcf87;border:1px solid var(--pri)}
-  .badge.hold{background:var(--danger);color:#fff;animation:pulse 1.3s ease-in-out infinite}
-  .slot.onhold{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger) inset}
+  .badge.hold{background:var(--pri);color:#2a1e00;animation:pulse 1.3s ease-in-out infinite}
+  .slot.onhold{border-color:var(--pri);box-shadow:0 0 0 1px var(--pri) inset}
   .idtag{color:var(--muted);font-size:11px;font-weight:600;flex:none}
   .who .items{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .money{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;margin-right:4px;white-space:nowrap}
@@ -772,9 +772,11 @@
       ? `<span class="badge back" title="This buyer already had ${e.priorFulfilled} order(s) fulfilled earlier this stream — check whether this should be combined">🔁 ${e.priorFulfilled} earlier today</span>` : '';
     // Two different buyers sharing an identical display name — flag + id tag.
     const dupBadge = e._dupName ? `<span class="badge samename" title="Another buyer in the queue has this exact display name — these are different people. Use the order numbers / id to keep them separate.">⚠ SAME NAME</span>` : '';
-    // TikTok has this order On Hold — most often a buyer cancellation request on
-    // an unshipped order (can also be an address / fraud hold). Verify before shipping.
-    const holdBadge = e.onHold ? `<span class="badge hold" title="TikTok put this order ON HOLD — during a live this is almost always a buyer cancellation request on an unshipped order (occasionally an address or fraud hold). Do NOT ship / seal the bag until you've checked it.">⚠ CANCEL REQ</span>` : '';
+    // This order has a fulfillment HOLD on Shopify. For iPoke that's a normal
+    // hold (giveaway orders, batching, or an address / fraud / manual-review hold)
+    // — NOT a cancellation request. Flag it so the packer double-checks before
+    // sealing, without implying the buyer asked to cancel.
+    const holdBadge = e.onHold ? `<span class="badge hold" title="This order is ON HOLD in Shopify (giveaway, address/fraud, or manual review). It still needs checking before you seal/ship — but a hold is not a cancellation.">⏸ ON HOLD</span>` : '';
     const idTag = e._dupName ? `<span class="idtag" title="Buyer id (last 4) — tells same-named buyers apart">id …${esc(e._idTag)}</span>` : '';
     const ordNos = `<span class="ordno">${e.orderIds.map(id=>'#'+esc(shortId(id))).join(' ')}</span>`;
     // Expanded view: items grouped by order number, with anything the buyer added
