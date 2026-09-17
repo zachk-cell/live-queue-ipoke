@@ -55,7 +55,12 @@
   .evt-spots .rem{color:var(--pri)} .evt-spots .full{color:var(--done)}
   .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
-    background:rgba(255,255,255, calc(var(--bg-alpha) * 0.05))}
+    background:rgba(255,255,255, calc(0.045 + var(--bg-alpha) * 0.05))}
+  /* Soft zebra: alternate rows get a gentle cool tint so each name separates
+     cleanly, even over video at full panel transparency. Keyed off queue
+     position (added in JS), not DOM order, so the stripes stay stable as the
+     reel loops. Top/priority highlights are defined AFTER this and win. */
+  .row.alt{background:rgba(120,150,230, calc(0.14 + var(--bg-alpha) * 0.10))}
   /* Top + priority rows keep a faint highlight even at full transparency so the
      next-up slot still reads over video. */
   .row.top{background:linear-gradient(90deg,rgba(79,140,255, calc(0.14 + var(--bg-alpha) * 0.22)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)));
@@ -251,8 +256,9 @@
   // One queue row. `top` highlights the #1 slot (in reel mode we key off the
   // real position so only the genuine leader is highlighted in each copy).
   function rowHtml(e, top){
+    const alt = (Number(e.position) % 2 === 0) ? ' alt' : '';
     return `
-      <div class="row${top?' top':''}${e.isPriority?' pri':''}">
+      <div class="row${top?' top':''}${e.isPriority?' pri':''}${alt}">
         <span class="pos">${e.position}</span>
         <span class="nm">${esc(e.buyer)}</span>
         ${e.isPriority?'<span class="star">★</span>':''}

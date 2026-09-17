@@ -259,11 +259,23 @@ export function startShopifyPolling(queue) {
     polling = true;
     try {
       const sinceIso = iso(sinceMs - 30000); // 30s overlap for safety
-      // 1) New paid, unfulfilled orders → into the queue.
+      // 1) New paid orders that still need packing → into the queue.
+      //    NOTE: we deliberately do NOT filter on `fulfillment_status:unfulfilled`
+      //    here. Shopify's search treats ON_HOLD (and SCHEDULED) as distinct from
+      //    "unfulfilled", so that filter silently drops orders that are placed on
+      //    hold the moment they're created — which is exactly what happens to
+      //    giveaway orders and to live orders that get an auto-hold before the next
+      //    poll tick. Instead we pull every paid, non-cancelled order and skip only
+      //    the ones that are already fully handled (FULFILLED/RESTOCKED) in code, so
+      //    on-hold / unfulfilled / partial / scheduled orders all reach the queue
+      //    (on-hold ones keep their hold flag via normalizeShopifyOrder).
       const fresh = await fetchOrdersMatching(
-        `created_at:>='${sinceIso}' financial_status:paid fulfillment_status:unfulfilled -status:cancelled`,
+        `created_at:>='${sinceIso}' financial_status:paid -status:cancelled`,
+        100,
       );
       for (const node of fresh) {
+        const ful = String(node.displayFulfillmentStatus || '').toUpperCase();
+        if (ful === 'FULFILLED' || ful === 'RESTOCKED') continue; // already done — not a packing task
         const norm = normalizeShopifyOrder(node);
         if (!norm || seen.has(norm.id)) continue;
         seen.set(norm.id, Date.parse(node.processedAt || node.createdAt) || Date.now());
