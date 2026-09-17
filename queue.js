@@ -104,6 +104,13 @@ export class QueueEngine extends EventEmitter {
     this._ensureDataDir();
     this._load();
     this._seedFromEnv();
+    // Boot stamp: every queue mutation stamps + tallies the current top slot via
+    // _markTopReached(), but a plain restart (redeploy) reloads orders without one.
+    // Stamp whoever is already at #1 now so a redeploy can't drop the top order's
+    // vault count — it would otherwise stay uncounted until the next queue change,
+    // and be missed entirely if that order were fulfilled first. The permanent
+    // reachedTopAt guard means an already-counted order is never counted twice.
+    try { if (this._markTopReached()) this._persist(); } catch (e) { console.warn('[queue] boot top-stamp failed:', e.message); }
   }
 
   /** Resolve the display name for a buyer, honouring a manual override. */
