@@ -180,6 +180,9 @@
   .qpager button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer}
   .qpager button:disabled{opacity:.4;cursor:default}
   .qpager .qpinfo{font-variant-numeric:tabular-nums}
+  .pagesize{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;text-transform:none;letter-spacing:0;color:var(--muted);font-weight:600}
+  .pagesize select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:4px 8px;font-size:12.5px;font-weight:700;cursor:pointer}
+  .pagesize select:focus{outline:none;border-color:var(--accent)}
   .vcard{background:#171a21;border:1px solid #272c38;border-radius:12px;padding:12px 14px}
   .vcard h3{margin:0 0 4px;font-size:13px}
   .vcard .vsub{color:#8b93a7;font-size:11px;line-height:1.35;margin:0 0 10px}
@@ -358,7 +361,18 @@
   <div id="tt-banner" class="offline-banner" style="display:none"></div>
 
   <div id="queue-block">
-    <div class="sectitle">Active queue — top is next</div>
+    <div class="sectitle" style="display:flex;align-items:center;gap:10px">
+      <span>Active queue — top is next</span>
+      <label class="pagesize">Show
+        <select id="page-size" onchange="setQueuePageSize(this.value)">
+          <option value="10">10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+        per page
+      </label>
+    </div>
     <div id="queue"></div>
     <div id="queue-pager" class="qpager" style="display:none"></div>
 
@@ -861,10 +875,24 @@
   }
   setInterval(tickTimers, 1000);
   // ── Active-queue pagination (client-side; no reload — just this area swaps) ──
-  const QUEUE_PAGE_SIZE = 25;
+  const QUEUE_PAGE_SIZES = [10, 25, 50, 100];
+  // How many orders show per page. Defaults to 25; the operator can change it via
+  // the dropdown and the choice is remembered on this device.
+  let QUEUE_PAGE_SIZE = 25;
+  try { const saved = parseInt(localStorage.getItem('ipoke-page-size'), 10); if(QUEUE_PAGE_SIZES.includes(saved)) QUEUE_PAGE_SIZE = saved; } catch(e){}
   let queuePage = 1;
   let _lastQueueFilter = null;
   function queueGoPage(n){ queuePage = n; renderQueue(); }
+  function setQueuePageSize(n){
+    n = parseInt(n, 10);
+    if(!QUEUE_PAGE_SIZES.includes(n)) return;
+    QUEUE_PAGE_SIZE = n;
+    try { localStorage.setItem('ipoke-page-size', String(n)); } catch(e){}
+    queuePage = 1; // jump back to the first page so the view isn't stranded past the end
+    renderQueue();
+  }
+  // Reflect the saved/default page size in the dropdown on load.
+  try { const _psel = document.getElementById('page-size'); if(_psel) _psel.value = String(QUEUE_PAGE_SIZE); } catch(e){}
   function renderQueuePager(total, pages, start, end){
     const el = document.getElementById('queue-pager'); if(!el) return;
     if(pages <= 1){ el.style.display='none'; el.innerHTML=''; return; }
