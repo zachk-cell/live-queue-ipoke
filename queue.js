@@ -234,7 +234,7 @@ export class QueueEngine extends EventEmitter {
       const envMode = String(process.env.COMBINE_MODE || '').trim().toLowerCase();
       if (!this._combineLoadedFromDisk) {
         if (COMBINE_MODES.has(envMode)) this.combineMode = envMode;
-        else if (this.perpetual) this.combineMode = 'untiltop'; // iPoke default
+        else if (this.perpetual) this.combineMode = 'off'; // iPoke default: no auto-combine
       }
       const envWin = Number(process.env.COMBINE_WINDOW_MINUTES);
       if (Number.isFinite(envWin) && envWin > 0 && !this._combineLoadedFromDisk) {
@@ -245,6 +245,17 @@ export class QueueEngine extends EventEmitter {
         this.overlays.queue.opacity = Math.max(0, Math.min(1, envOp));
       }
     } catch (e) { console.warn('[queue] COMBINE_MODE seed failed:', e.message); }
+    // Un-combine on restart: when auto-combine is off, no slot should carry more
+    // than one order across a reboot. Split any that were merged before, so the
+    // board comes back up with every order in its own slot (admins re-combine by
+    // hand as needed). Runs silently on boot — no 'change' listeners are attached
+    // yet, and _persist below captures the result.
+    try {
+      if (this.combineMode === 'off') {
+        const n = this._splitCombinedSlots();
+        if (n) console.log(`[queue] un-combined ${n} order(s) on boot (combine mode off)`);
+      }
+    } catch (e) { console.warn('[queue] boot un-combine failed:', e.message); }
     // Recompute priority flags in case the env extras changed matching, then save.
     for (const o of this.orders.values()) o.hasPriority = this._isPriorityOrder(o.items);
     this._persist();
@@ -1100,11 +1111,40 @@ export class QueueEngine extends EventEmitter {
 
   /** Set the combine mode (and optional window in minutes). NOT retroactive:
    *  existing slots are left as-is; the change applies to future orders. */
+  /** Un-combine: give every queued order its own slot again, undoing any slots
+   *  that hold more than one order. Called when auto-combine is switched OFF so
+   *  previously-merged orders each show as their own position. Returns how many
+   *  orders were split out. */
+  _splitCombinedSlots() {
+    const byBatch = new Map();
+    for (const o of this.orders.values()) {
+      if (o.status !== 'queued') continue;
+      if (!byBatch.has(o.batchKey)) byBatch.set(o.batchKey, []);
+      byBatch.get(o.batchKey).push(o);
+    }
+    let split = 0;
+    for (const [, orders] of byBatch) {
+      if (orders.length <= 1) continue;
+      orders.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      // Earliest order keeps the existing slot; each later one gets a fresh slot.
+      for (let i = 1; i < orders.length; i++) {
+        orders[i].batchKey = `${orders[i].buyerId}#${++this.batchCounter}`;
+        orders[i].mergedWhileTop = false;
+        split++;
+      }
+    }
+    this.openBatch.clear(); // nothing stays "open" to merge into once split
+    if (split) { this._markTopReached(); this._persist(); this.emit('change', { reason: 'uncombine' }); }
+    return split;
+  }
+
   setCombineMode(mode, windowMinutes) {
     if (!COMBINE_MODES.has(mode)) return false;
     this.combineMode = mode;
     const w = Number(windowMinutes);
     if (Number.isFinite(w) && w > 0) this.combineWindowMs = Math.round(w * 60 * 1000);
+    // Turning auto-combine OFF un-combines any currently-merged slots.
+    if (mode === 'off') this._splitCombinedSlots();
     this._persist();
     this.emit('change', { reason: 'combine-config', combineMode: this.combineMode, combineWindowMs: this.combineWindowMs });
     return true;
@@ -1120,9 +1160,16 @@ export class QueueEngine extends EventEmitter {
       .map((k) => ({ k, orders: [...this.orders.values()].filter((o) => o.batchKey === k && o.status === 'queued') }))
       .filter((g) => g.orders.length);
     if (groups.length < 2) return null;
-    const buyerIds = new Set(groups.flatMap((g) => g.orders.map((o) => o.buyerId)));
-    if (buyerIds.size !== 1) return null; // refuse cross-buyer combines
-    const buyerId = [...buyerIds][0];
+    // Manual combine is name-based: the admin explicitly picks the slots, and the
+    // UI only offers slots that share a buyer name, so combining across distinct
+    // buyerIds is allowed as long as every selected slot resolves to the same
+    // display name (case/space-insensitive). This lets one person who checked out
+    // under two different accounts/names be merged into a single slot.
+    const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const names = new Set(
+      groups.flatMap((g) => g.orders.map((o) => norm(this._displayName(o.buyerId, o.buyer)))),
+    );
+    if (names.size !== 1) return null; // refuse combines across different names
     // Target = the slot with the earliest first order (keeps its place in line).
     let target = groups[0];
     let targetFirst = Math.min(...groups[0].orders.map((o) => o.createdAt || 0));
@@ -1131,13 +1178,19 @@ export class QueueEngine extends EventEmitter {
       if (f < targetFirst) { target = g; targetFirst = f; }
     }
     const targetKey = target.k;
+    const targetBuyerId = target.orders[0] && target.orders[0].buyerId;
     for (const g of groups) {
       if (g.k === targetKey) continue;
-      for (const o of g.orders) o.batchKey = targetKey;
-      if (this.openBatch.get(buyerId) === g.k) this.openBatch.delete(buyerId);
+      for (const o of g.orders) {
+        // Clear any open-batch pointer for THIS order's buyer before re-homing it,
+        // then move it onto the target slot.
+        if (this.openBatch.get(o.buyerId) === g.k) this.openBatch.delete(o.buyerId);
+        o.batchKey = targetKey;
+      }
+      if (this.openBatch.get(g.k) != null) this.openBatch.delete(g.k);
       this.preppedBatches.delete(g.k);
     }
-    if (this.combineMode !== 'off') this.openBatch.set(buyerId, targetKey);
+    if (this.combineMode !== 'off' && targetBuyerId != null) this.openBatch.set(targetBuyerId, targetKey);
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'manual-combine', batchKey: targetKey });

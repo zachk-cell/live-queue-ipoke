@@ -96,34 +96,37 @@ function buildPiggyMessage(queue) {
 // tells refresh() to delete the message if one is currently up.
 function buildEventMessage(queue) {
   const snap = queue.snapshot();
-  const ev = snap.activeEvent; // full event queue object, or null
-  if (!ev) return null;
-  const lines = [];
-  const type = ev.type === 'wta' ? 'WTA' : 'Quack Pack';
-  lines.push(`**🎟 ${ev.title}**  \`${type}\``);
-  if (ev.description) lines.push(`_${ev.description}_`);
-  if (ev.totalSpots > 0) {
-    lines.push(ev.soldOut
-      ? `**SOLD OUT** — ${ev.spotsOrdered}/${ev.totalSpots} spots`
-      : `${ev.spotsOrdered}/${ev.totalSpots} spots — **${ev.spotsRemaining} left**`);
-  } else {
-    lines.push(`${ev.spotsOrdered} spots ordered`);
-  }
-  lines.push('');
-  if (!ev.entries.length) {
-    lines.push('_No spots yet._');
-  } else {
-    let used = lines.join('\n').length;
+  // Show EVERY open event (all WTAs and Quack Packs), each with its spot count,
+  // not just the one toggled "active". Returns null only when there are no open
+  // events, which tells refresh() to remove the message.
+  const events = (snap.events || []).filter((e) => e.status !== 'ripped');
+  if (!events.length) return null;
+  const lines = ['**🎟 Events — Quack Packs & WTAs**'];
+  const PER_EVENT_MAX = 12; // roster names shown per event
+  for (const ev of events) {
+    const type = ev.type === 'wta' ? 'WTA' : 'Quack';
+    let count;
+    if (ev.totalSpots > 0) {
+      count = ev.soldOut
+        ? `**SOLD OUT** — ${ev.spotsOrdered}/${ev.totalSpots}`
+        : `${ev.spotsOrdered}/${ev.totalSpots} spots — **${ev.spotsRemaining} left**`;
+    } else {
+      count = `${ev.spotsOrdered} spots ordered`;
+    }
+    lines.push('');
+    lines.push(`\`${type}\` **${ev.title}** · ${count}`);
+    const entries = ev.entries || [];
+    if (!entries.length) { lines.push('_No spots yet._'); continue; }
     let shown = 0;
-    for (const e of ev.entries) {
+    for (const e of entries) {
       const sp = e.spots > 1 ? ` ×${e.spots}` : '';
-      const line = `\`${String(e.position).padStart(2)}\` **${e.buyer}**${sp}`;
-      if (shown >= MAX_SHOWN || used + line.length + 1 > CHAR_BUDGET) break;
+      const line = `\`${String(e.position).padStart(2)}\` ${e.buyer}${sp}`;
+      if (shown >= PER_EVENT_MAX || (lines.join('\n').length + line.length + 1) > CHAR_BUDGET) break;
       lines.push(line);
-      used += line.length + 1;
       shown++;
     }
-    if (ev.entries.length > shown) lines.push(`_…and ${ev.entries.length - shown} more_`);
+    if (entries.length > shown) lines.push(`_…and ${entries.length - shown} more_`);
+    if (lines.join('\n').length > CHAR_BUDGET) break; // whole-message safety
   }
   lines.push('');
   lines.push('_Pulled in the order spots were bought. Order details are private._');

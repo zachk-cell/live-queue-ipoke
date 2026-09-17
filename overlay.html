@@ -82,6 +82,20 @@
   .off{padding:22px 18px;text-align:center;color:var(--muted);font-size:15px}
   /* Background, border & scale are driven live from the admin Overlay Sliders
      popup (pushed over the socket) — no on-page controls here. */
+
+  /* ── Reel mode (?reel=1) ──────────────────────────────────────────────────
+     The overlay slowly rolls through the ENTIRE queue, looping seamlessly,
+     instead of showing a static top-N with a "+N more" line. The panel fills
+     the full overlay height so there's a viewport to scroll within, the list
+     becomes that clipped viewport, and a duplicated track glides upward. */
+  body.reel #wrap{height:auto}
+  body.reel .panel{height:100%}
+  body.reel .list{flex:1 1 auto;min-height:0;display:block;position:relative;overflow:hidden;
+    /* soft fade at the top & bottom edges so rows ease in/out rather than pop */
+    -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 22px,#000 calc(100% - 22px),transparent 100%);
+    mask-image:linear-gradient(to bottom,transparent 0,#000 22px,#000 calc(100% - 22px),transparent 100%)}
+  .reel-track{display:flex;flex-direction:column;gap:6px;will-change:transform}
+  .reel-track .row{flex:none}
 </style>
 </head>
 <body>
@@ -102,8 +116,13 @@
   const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 12, 40));
   const SIDE = params.get('side') === 'right' ? 'right' : 'left';
   const TITLE = params.get('title');
+  // Reel mode: slowly auto-scroll through the WHOLE queue, looping. Enable with
+  // ?reel=1. ?speed= sets the roll speed in pixels/second (default 26).
+  const REEL = ['1','true','yes','on'].includes(String(params.get('reel')||'').toLowerCase());
+  const REEL_SPEED = Math.max(4, Math.min(Number(params.get('speed')) || 26, 300));
   const wrap = document.getElementById('wrap');
   wrap.className = SIDE;
+  if(REEL) document.body.classList.add('reel');
 
   const clamp01 = (n) => Math.max(0, Math.min(1, n));
   const clampScale = (n) => Math.max(0.5, Math.min(3, n));
@@ -166,6 +185,7 @@
       meta.innerHTML = '';
       moreEl.textContent = '';
       dot.style.background = '#ff5d5d'; dot.style.boxShadow='0 0 10px #ff5d5d';
+      list.classList.remove('reeling'); reelSig=''; // drop any reel track
       list.innerHTML = '<div class="off">Queue is closed.</div>';
       return;
     }
@@ -188,6 +208,7 @@
                   : `${ev.spotsOrdered}/${ev.totalSpots} spots · <span class="rem">${ev.spotsRemaining} left</span>`)
               : `${ev.spotsOrdered} spots ordered`)
           + `</div>`;
+      list.classList.remove('reeling'); reelSig=''; // event view isn't a reel
       const rows = ev.entries.slice(0, ROWS);
       list.innerHTML = rows.length ? rows.map((e,i)=>`
         <div class="row${i===0?' top':''}">
@@ -206,17 +227,94 @@
     const q = state.queue||[];
     countEl.textContent = q.length + (q.length===1?' in line':' in line');
     meta.innerHTML = '';
+
+    if(REEL){
+      // Reel mode: render EVERYONE and let the track auto-scroll. No slicing,
+      // no "+N more".
+      moreEl.textContent = '';
+      if(!q.length){ stopReel(); list.classList.remove('reeling'); list.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>'; return; }
+      renderReel(q);
+      return;
+    }
+
     const rows = q.slice(0, ROWS);
-    list.innerHTML = rows.length ? rows.map((e,i)=>`
-      <div class="row${i===0?' top':''}${e.isPriority?' pri':''}">
+    list.innerHTML = rows.length ? rows.map((e,i)=>rowHtml(e, i===0)).join('') : '<div class="empty">Queue is empty — waiting on orders.</div>';
+    moreEl.textContent = q.length>rows.length ? `+${q.length-rows.length} more in line` : '';
+  }
+
+  // One queue row. `top` highlights the #1 slot (in reel mode we key off the
+  // real position so only the genuine leader is highlighted in each copy).
+  function rowHtml(e, top){
+    return `
+      <div class="row${top?' top':''}${e.isPriority?' pri':''}">
         <span class="pos">${e.position}</span>
         <span class="nm">${esc(e.buyer)}</span>
         ${e.isPriority?'<span class="star">★</span>':''}
         ${e.prepped?'<span class="prep" title="prepped">✓</span>':''}
         ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}
-      </div>`).join('') : '<div class="empty">Queue is empty — waiting on orders.</div>';
-    moreEl.textContent = q.length>rows.length ? `+${q.length-rows.length} more in line` : '';
+      </div>`;
   }
+
+  // ── Reel auto-scroll engine ──────────────────────────────────────────────
+  // Renders two identical copies of the full queue stacked in a track, then
+  // glides the track upward at a constant speed. When it has moved by exactly
+  // one copy's height it wraps back by that amount — since copy #2 is identical
+  // to copy #1 at that point, the wrap is invisible and the loop is seamless.
+  let reelOffset = 0;   // current scroll distance (px)
+  let reelCopyH = 0;    // height of ONE copy incl. its trailing gap (px)
+  let reelSig = '';     // signature of the rendered queue (rebuild only on change)
+  let reelRAF = null;
+  let reelLastTs = 0;
+
+  function queueSig(q){ return q.map(e=>e.key+':'+e.position+':'+(e.prepped?1:0)+':'+(e.isPriority?1:0)+':'+e.buyer).join('|'); }
+
+  function renderReel(q){
+    const list = document.getElementById('list');
+    list.classList.add('reeling');
+    const sig = queueSig(q);
+    if(sig !== reelSig){
+      reelSig = sig;
+      const copy = q.map(e=>rowHtml(e, e.position===1)).join('');
+      // Two copies for the seamless wrap.
+      list.innerHTML = `<div class="reel-track" id="reelTrack">${copy}${copy}</div>`;
+      measureReel();
+      // Keep the scroll position sensible across rebuilds.
+      if(reelCopyH>0) reelOffset = reelOffset % reelCopyH; else reelOffset = 0;
+    }
+    startReel();
+  }
+
+  function measureReel(){
+    const track = document.getElementById('reelTrack');
+    if(!track){ reelCopyH = 0; return; }
+    // The track holds two copies; one copy (plus the gap that separates it from
+    // the next) is exactly half the scrollHeight.
+    reelCopyH = track.scrollHeight / 2;
+  }
+
+  function reelFrame(ts){
+    reelRAF = requestAnimationFrame(reelFrame);
+    const track = document.getElementById('reelTrack');
+    if(!track){ return; }
+    if(!reelCopyH){ measureReel(); }
+    const list = document.getElementById('list');
+    const viewH = list ? list.clientHeight : 0;
+    // If everyone already fits in view, don't scroll — just sit at the top.
+    if(reelCopyH <= viewH + 2){ reelOffset = 0; track.style.transform = 'translateY(0)'; reelLastTs = ts; return; }
+    if(!reelLastTs){ reelLastTs = ts; }
+    const dt = Math.min(0.1, (ts - reelLastTs) / 1000); // clamp to avoid jumps after a tab stall
+    reelLastTs = ts;
+    reelOffset += REEL_SPEED * dt;
+    if(reelOffset >= reelCopyH) reelOffset -= reelCopyH;
+    track.style.transform = `translateY(${-reelOffset}px)`;
+  }
+
+  function startReel(){ if(reelRAF==null){ reelLastTs = 0; reelRAF = requestAnimationFrame(reelFrame); } }
+  function stopReel(){ if(reelRAF!=null){ cancelAnimationFrame(reelRAF); reelRAF = null; } reelSig = ''; reelOffset = 0; reelCopyH = 0; }
+
+  // Re-measure on window resize so the loop stays seamless if the source size changes.
+  window.addEventListener('resize', () => { reelSig=''; if(REEL) render(); });
+
   render();
 </script>
 </body>

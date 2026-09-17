@@ -226,6 +226,9 @@
   .selb{background:transparent;color:var(--muted);border:1px solid var(--line);padding:6px 8px;font-size:13px;line-height:1;flex:none}
   .slot.selected{outline:2px solid var(--pri)}
   .slot.selected .selb{background:var(--pri);color:#2a1e00;border-color:var(--pri)}
+  /* Same-name candidates while a combine selection is active (#35) */
+  .slot.name-match{outline:2px dashed var(--accent);outline-offset:-2px;background:linear-gradient(90deg,rgba(90,160,255,.10),var(--panel))}
+  .slot.name-match .selb{border-color:var(--accent);color:var(--accent)}
   .combine-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:25;
     background:var(--panel);border:1px solid var(--pri);border-radius:12px;padding:10px 14px;
     display:none;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
@@ -469,7 +472,7 @@
 
 <!-- iPoke: manual-combine selection bar -->
 <div class="combine-bar" id="combineBar">
-  <span><b id="cb-count">0</b> orders selected to combine</span>
+  <span><b id="cb-count">0</b> orders selected · matching names are highlighted</span>
   <button class="ghost" onclick="clearCombineSel()">Cancel</button>
   <button class="primary" onclick="doCombineSelected()">Combine</button>
 </div>
@@ -789,7 +792,7 @@
     const afterTopBadge = e.afterTop
       ? `<span class="badge back" title="New order this buyer placed after they were already at the top — handled as its own position.">↑ after top</span>` : '';
     const ipokeActions = perp ? (
-        `<button class="selb" title="Select to combine with another order from the SAME buyer" onclick="toggleSelect('${e.key}')">⛓</button>`
+        `<button class="selb" title="Select to combine — other orders with the same name get highlighted" onclick="toggleSelect('${e.key}')">⛓</button>`
       + `<button class="nameb" title="Edit display name" onclick="editName('${e.key}')">✏️</button>`
       + `<button class="prepb ${e.prepped?'on':''}" title="Mark prepped / ready to fulfill" onclick="togglePrep('${e.key}',${e.prepped?'false':'true'})">📦</button>`
     ) : '';
@@ -863,6 +866,14 @@
       e._dupName = nameCounts[(e.buyer||'').toLowerCase()]>1;
       e._idTag = e._dupName ? String(e.buyerId||'').slice(-4) : '';
     }
+    // Combine helper: when the operator has selected one or more slots, highlight
+    // every OTHER queued slot that shares a buyer name with a selection, so
+    // same-name orders that can be merged are obvious at a glance. (#35)
+    const _cnorm = s => (s||'').toLowerCase().trim().replace(/\s+/g,' ');
+    const matchNames = new Set();
+    if(selectedKeys.size){
+      for(const e of (state.queue||[])){ if(selectedKeys.has(e.key)) matchNames.add(_cnorm(e.buyer)); }
+    }
     const qEl = document.getElementById('queue');
     if(!list.length){
       if(!qEl.querySelector('.empty')) qEl.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>';
@@ -904,6 +915,8 @@
       }
       // preserve the user's expand/collapse choice across live updates
       node.classList.toggle('expanded', expandedKeys.has(e.key));
+      // highlight same-name slots while a combine selection is active
+      node.classList.toggle('name-match', !selectedKeys.has(e.key) && matchNames.size>0 && matchNames.has(_cnorm(e.buyer)));
       // move into position ONLY if it's not already there (no needless re-attach)
       if(qEl.children[idx] !== node) qEl.insertBefore(node, qEl.children[idx] || null);
     });
@@ -1405,7 +1418,7 @@
     if(keys.length<2) return;
     const r = await postJSON('/api/combine-slots',{keys});
     const j = await r.json().catch(()=>({}));
-    if(!j.ok) alert("Couldn't combine these — they must be unfulfilled orders from the SAME buyer.");
+    if(!j.ok) alert("Couldn't combine these — they must be unfulfilled orders with the SAME buyer name.");
     clearCombineSel();
   }
 
