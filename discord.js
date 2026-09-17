@@ -101,8 +101,8 @@ function buildEventMessage(queue) {
   // events, which tells refresh() to remove the message.
   const events = (snap.events || []).filter((e) => e.status !== 'ripped');
   if (!events.length) return null;
-  const lines = ['**🎟 Events — Quack Packs & WTAs**'];
-  const PER_EVENT_MAX = 12; // roster names shown per event
+  const lines = ['**🎟 Events — Quack Packs & WTAs**  _(tap a roster to expand)_'];
+  const PER_EVENT_MAX = 30; // roster names hidden in the spoiler (they take no visible space)
   for (const ev of events) {
     const type = ev.type === 'wta' ? 'WTA' : 'Quack';
     let count;
@@ -114,22 +114,32 @@ function buildEventMessage(queue) {
       count = `${ev.spotsOrdered} spots ordered`;
     }
     lines.push('');
+    // Always-visible one-line summary.
     lines.push(`\`${type}\` **${ev.title}** · ${count}`);
     const entries = ev.entries || [];
     if (!entries.length) { lines.push('_No spots yet._'); continue; }
+    // Build the roster and tuck it inside a Discord spoiler so it stays collapsed
+    // (click-to-reveal) — the names take no visible space until expanded.
+    const rosterLines = [];
     let shown = 0;
     for (const e of entries) {
+      if (shown >= PER_EVENT_MAX) break;
       const sp = e.spots > 1 ? ` ×${e.spots}` : '';
-      const line = `\`${String(e.position).padStart(2)}\` ${e.buyer}${sp}`;
-      if (shown >= PER_EVENT_MAX || (lines.join('\n').length + line.length + 1) > CHAR_BUDGET) break;
-      lines.push(line);
+      rosterLines.push(`\`${String(e.position).padStart(2)}\` ${e.buyer}${sp}`);
       shown++;
     }
-    if (entries.length > shown) lines.push(`_…and ${entries.length - shown} more_`);
-    if (lines.join('\n').length > CHAR_BUDGET) break; // whole-message safety
+    if (entries.length > shown) rosterLines.push(`…and ${entries.length - shown} more`);
+    const spoiler = `||${rosterLines.join('\n')}||`;
+    // Keep the whole message under Discord's limit; if a roster would overflow,
+    // hide it behind a note instead so the summary lines still post.
+    if ((lines.join('\n').length + spoiler.length + 1) > CHAR_BUDGET) {
+      lines.push(`_${entries.length} spot${entries.length === 1 ? '' : 's'} — roster hidden to save space_`);
+      break;
+    }
+    lines.push(spoiler);
   }
   lines.push('');
-  lines.push('_Pulled in the order spots were bought. Order details are private._');
+  lines.push('_Rosters are collapsed — tap to reveal. Pulled in purchase order; details private._');
   lines.push(`_Updated <t:${Math.floor(Date.now() / 1000)}:R>_`);
   return lines.join('\n');
 }
