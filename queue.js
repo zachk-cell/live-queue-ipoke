@@ -800,13 +800,17 @@ export class QueueEngine extends EventEmitter {
     const orders = [...this.orders.values()].filter((o) => o.batchKey === batchKey);
     if (!orders.length) return null;
     const buyerId = orders[0].buyerId;
-    // Only reopen if the buyer has no other open slot.
-    if (this.openBatch.has(buyerId)) return null;
+    // In an AUTO-COMBINE mode, refuse if the buyer already has an open slot — we
+    // couldn't tell which slot new orders should merge into. With combine OFF
+    // (iPoke), every order is its own independent slot, so the buyer having
+    // another order in the queue is fine and reopening never conflicts.
+    if (this.combineMode !== 'off' && this.openBatch.has(buyerId)) return null;
     for (const o of orders) {
       o.status = 'queued';
       o.fulfilledAt = null;
+      o.bumped = false; // return to its natural position, not the top
     }
-    this.openBatch.set(buyerId, batchKey);
+    if (this.combineMode !== 'off') this.openBatch.set(buyerId, batchKey);
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'reopened', batchKey });
