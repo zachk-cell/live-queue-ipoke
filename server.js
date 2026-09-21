@@ -307,6 +307,8 @@ app.get(ADMIN + '/logout', (_req, res) => {
 });
 app.get(ADMIN + '/history', (req, res) =>
   sendAdminPage(res, isAuthed(req) ? 'history.html' : 'login.html'));
+app.get(ADMIN + '/events', (req, res) =>
+  sendAdminPage(res, isAuthed(req) ? 'events-history.html' : 'login.html'));
 
 // ---------- Control API (auth required) ----------
 app.get('/api/state', requireAuth, (_req, res) => res.json(queue.snapshot()));
@@ -353,6 +355,13 @@ app.post('/api/events/:id/active', requireAuth, (req, res) => {
   res.json({ ok: true, activeEventId: queue.setActiveEvent(on ? req.params.id : null) });
 });
 app.post('/api/events/:id/rip', requireAuth, (req, res) => res.json({ ok: queue.ripEvent(req.params.id) }));
+// Archive a finished event to Past Events (keeps the roster) then clear it off the board.
+app.post('/api/events/:id/archive', requireAuth, (req, res) => {
+  const rec = queue.archiveEvent(req.params.id);
+  res.json({ ok: !!rec, event: rec || null });
+});
+// Past (archived) events list for the Past Events page.
+app.get('/api/past-events', requireAuth, (_req, res) => res.json({ pastEvents: queue.pastEvents || [] }));
 app.get('/api/events/:id', requireAuth, (req, res) => {
   const q = queue.eventQueue(req.params.id);
   if (!q) return res.status(404).json({ error: 'no such event' });

@@ -21,6 +21,8 @@ const STATE_FILE = path.join(DATA_DIR, 'queue-state.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events-state.json'); // iPoke: event entries (side-queues)
+const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
+const PAST_EVENTS_MAX = 200; // keep the most recent N archived events
 const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
 
 // Order-combining modes (how a buyer's repeat orders are grouped into one slot):
@@ -86,6 +88,7 @@ export class QueueEngine extends EventEmitter {
     // spots routed out of the main queue by keyword.
     this.events = []; // [{ id, type:'quack'|'wta', title, description, totalSpots, keywords:[], status:'open'|'ripped', createdAt }]
     this.eventEntries = new Map(); // entryId -> entry
+    this.pastEvents = []; // archived finished events (most recent first)
     this.eventCounter = 0;
     this.activeEventId = null; // which event side-queue is toggled to the overlay/Discord
     // Durable dedup for orders that produced ONLY event entries (and so never
@@ -175,6 +178,14 @@ export class QueueEngine extends EventEmitter {
       }
     } catch (e) {
       console.warn('[queue] could not load events:', e.message);
+    }
+    try {
+      if (fs.existsSync(PAST_EVENTS_FILE)) {
+        const arr = JSON.parse(fs.readFileSync(PAST_EVENTS_FILE, 'utf8'));
+        if (Array.isArray(arr)) this.pastEvents = arr;
+      }
+    } catch (e) {
+      console.warn('[queue] could not load past events:', e.message);
     }
     try {
       if (fs.existsSync(HISTORY_FILE)) {
@@ -481,6 +492,14 @@ export class QueueEngine extends EventEmitter {
       this._atomicWrite(HISTORY_FILE, JSON.stringify(this.history));
     } catch (e) {
       console.warn('[queue] history persist failed:', e.message);
+    }
+  }
+
+  _persistPastEvents() {
+    try {
+      this._atomicWrite(PAST_EVENTS_FILE, JSON.stringify(this.pastEvents));
+    } catch (e) {
+      console.warn('[queue] past-events persist failed:', e.message);
     }
   }
 
@@ -1523,6 +1542,53 @@ export class QueueEngine extends EventEmitter {
     this._persist();
     this.emit('change', { reason: 'event-remove', eventId: id });
     return true;
+  }
+
+  /** Archive a finished event to the Past Events list (full roster preserved),
+   *  then remove it from the active board. The counterpart to removeEvent that
+   *  keeps a record instead of discarding it. Returns the archived record. */
+  archiveEvent(id) {
+    const ev = this.events.find((e) => e.id === id);
+    if (!ev) return null;
+    // Capture the FULL roster directly (queued + fulfilled), ordered by purchase
+    // time — not via eventQueue(), which hides fulfilled spots once an event is
+    // ripped and would archive an empty roster.
+    const all = [...this.eventEntries.values()]
+      .filter((e) => e.eventId === id && (e.status === 'queued' || e.status === 'fulfilled'))
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const entries = all.map((e, i) => ({
+      position: i + 1,
+      buyer: this._displayName(e.buyerId, e.buyer),
+      spots: e.spots,
+      orderName: e.orderName || '',
+      orderId: e.orderId || '',
+      createdAt: e.createdAt || null,
+      fulfilled: e.status === 'fulfilled',
+    }));
+    const startedAt = entries.reduce(
+      (min, e) => (e.createdAt && (min == null || e.createdAt < min) ? e.createdAt : min),
+      null,
+    );
+    const record = {
+      id: ev.id,
+      type: ev.type,
+      title: ev.title,
+      description: ev.description || '',
+      totalSpots: ev.totalSpots || 0,
+      spotsOrdered: entries.reduce((n, e) => n + (Number(e.spots) || 0), 0),
+      entryCount: entries.length,
+      startedAt,
+      createdAt: ev.createdAt || null,
+      archivedAt: Date.now(),
+      entries,
+    };
+    this.pastEvents.unshift(record);
+    this.pastEvents = this.pastEvents.slice(0, PAST_EVENTS_MAX);
+    this._persistPastEvents();
+    // Now clear it off the active board (removeEvent persists + emits).
+    this.removeEvent(id);
+    this.emit('change', { reason: 'event-archived', eventId: id });
+    return record;
   }
 
   /** Toggle which event side-queue is "active" (shown on overlay/Discord). */

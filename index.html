@@ -272,7 +272,10 @@
   .emini .eminisp{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
   .emini .eminisp .rem{color:var(--pri);font-weight:800}
   .emini .eminisp .full{color:var(--done);font-weight:800}
-  .ecard .eh .eadd{margin-left:auto;background:#2b6bff;border:none;color:#fff;font-weight:700;padding:7px 12px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .ecard .eh .eh-btns{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .ecard .eh .eh-btns .eadd{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:7px 12px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .ecard .eh .epast{color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;white-space:nowrap}
+  .ecard .eh .epast:hover{text-decoration:underline}
   .erow{border-top:1px solid #21262f;padding:10px 0}
   .erow:first-of-type{border-top:none}
   .erow .etop{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
@@ -292,6 +295,8 @@
   .ebtns .eedit{background:transparent;color:#cdd4e4;border:1px solid var(--line)}
   .ebtns .edel{background:transparent;color:var(--muted);border:1px solid transparent}
   .ebtns .edel:hover{color:var(--danger);border-color:var(--danger)}
+  .ebtns .earch{background:#12331f;color:#43e08a;border:1px solid #1c5133}
+  .ebtns .earch:hover{filter:brightness(1.15)}
   .ekw{color:#748099;font-size:11.5px;margin-top:5px}
   .espots-wrap{margin-top:7px}
   .espots-meter{height:7px;border-radius:5px;background:#1d212b;overflow:hidden;margin-top:4px}
@@ -1336,6 +1341,16 @@
       confirmText:'Delete event', danger:true});
     if(ok) await fetch('/api/events/'+encodeURIComponent(id),{method:'DELETE'});
   }
+  // Secondary step after "Event Fulfilled": archive the event + its roster to
+  // Past Events, then clear it off the board.
+  async function archiveEventUI(id){
+    const ev=(state.events||[]).find(e=>e.id===id);
+    const n=(ev&&ev.entryCount!=null)?ev.entryCount:((ev&&ev.entries&&ev.entries.length)||0);
+    const ok = await uiConfirm({title:'Remove & archive "'+((ev&&ev.title)||'event')+'"?',
+      body:'Saves this event and its '+n+' order'+(n===1?'':'s')+' to Past Events, then clears it off the board. You can view it later on the Past events page.',
+      confirmText:'Remove & Archive', danger:false});
+    if(ok) await postJSON('/api/events/'+encodeURIComponent(id)+'/archive');
+  }
   async function removeEventEntryUI(entryId){
     const ok = await uiConfirm({title:'Remove this spot?',
       body:'Removes this buyer\'s spot from the event (e.g. refunded). Cannot be undone from here.',
@@ -1390,7 +1405,9 @@
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
             <button class="eedit" onclick="editEvent('${e.id}')">Edit</button>
-            <button class="edel" onclick="removeEventUI('${e.id}')">Delete</button>
+            ${ripped
+              ? `<button class="earch" onclick="archiveEventUI('${e.id}')" title="Save this event and its roster to Past Events, then clear it off the board">✓ Remove &amp; Archive</button>`
+              : `<button class="edel" onclick="removeEventUI('${e.id}')">Delete</button>`}
           </div>
         </div>
         <div class="espots-wrap">
@@ -1417,7 +1434,7 @@
     box.innerHTML = `<div class="ecard${eventsCollapsed?' collapsed':''}">
       <div class="eh">
         <h3 onclick="toggleEventsCollapse()" title="Collapse / expand this section"><span class="ecav">▾</span>🎟 Events &amp; side-queues</h3>
-        <button class="eadd" onclick="openEvent()">＋ Add event</button></div>
+        <div class="eh-btns"><a href="{{ADMIN}}/events" target="_blank" class="epast" title="View finished events you've archived">🗂 Past events ↗</a><button class="eadd" onclick="openEvent()">＋ Add event</button></div></div>
       ${eventsCollapsed
         ? `<div class="emini-list">${evs.length ? evs.map(miniHtml).join('') : '<div style="color:#748099;font-size:12.5px">No events yet.</div>'}</div>`
         : (evs.length ? evs.map(rowHtml).join('') : '<div style="color:#748099;font-size:13px;padding:6px 0">No events yet. Add one when a Quack Pack or WTA goes up.</div>')}

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>iPoke — Past Events</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --line:#272c38;
+    --text:#e8ebf2; --muted:#8b93a7; --accent:#4f8cff; --accent2:#2b6bff;
+    --pri:#ffb020; --pri-bg:#3a2c0c; --done:#25c26e; --danger:#ff5d5d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  header{border-bottom:1px solid var(--line);padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0;font-weight:800}
+  .hdr-link{color:var(--text);text-decoration:none;background:var(--panel2);
+    border:1px solid var(--line);border-radius:9px;font-size:13px;font-weight:600;padding:8px 12px}
+  .hdr-link:hover{border-color:var(--accent)}
+  .sub{color:var(--muted);font-size:13px;margin-left:auto}
+  main{padding:18px 20px;max-width:1100px;margin:0 auto}
+  .empty{color:var(--muted);font-size:15px;text-align:center;padding:48px 18px}
+  .ev{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}
+  .ev-top{display:flex;align-items:center;gap:11px;padding:13px 16px;cursor:pointer;flex-wrap:wrap}
+  .ev-top:hover{background:var(--panel2)}
+  .etype{font-size:10.5px;font-weight:800;letter-spacing:.4px;padding:3px 8px;border-radius:6px;flex:none}
+  .etype.quack{background:#0e2a44;color:#8fd0ff} .etype.wta{background:var(--pri-bg);color:var(--pri)}
+  .ev-name{font-weight:800;font-size:15px}
+  .ev-count{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+  .ev-count b{color:var(--text)}
+  .ev-when{color:var(--muted);font-size:12px;margin-left:auto;font-variant-numeric:tabular-nums;text-align:right}
+  .ev-cav{color:var(--muted);font-size:10px;transition:transform .15s;flex:none}
+  .ev.open .ev-cav{transform:rotate(90deg)}
+  .ev-body{display:none;border-top:1px solid var(--line);padding:10px 16px 14px}
+  .ev.open .ev-body{display:block}
+  .ev-desc{color:var(--muted);font-size:12.5px;margin:2px 0 10px}
+  .ev-actions{display:flex;gap:9px;margin-bottom:10px}
+  .btn{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;
+    padding:6px 11px;font-size:12.5px;font-weight:700;cursor:pointer;text-decoration:none}
+  .btn:hover{border-color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.06)}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;font-weight:700}
+  td.pos,td.spots{font-variant-numeric:tabular-nums;color:var(--muted)}
+  td.buyer{font-weight:700}
+  td.ord{color:#748099;font-variant-numeric:tabular-nums}
+  .done-pill{color:var(--done);font-weight:800;font-size:11px}
+  .foot{color:var(--muted);font-size:12px;text-align:center;padding:20px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>🗂 Past Events</h1>
+  <a class="hdr-link" href="{{ADMIN}}">← Back to queue</a>
+  <button class="hdr-link" onclick="load()">↻ Refresh</button>
+  <span class="sub" id="sub"></span>
+</header>
+<main id="list"><div class="empty">Loading…</div></main>
+
+<script>
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+  function fmtPST(ms){
+    if(!ms) return '';
+    try{ return new Date(Number(ms)).toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'numeric',day:'numeric',year:'2-digit',hour:'numeric',minute:'2-digit',hour12:true}); }
+    catch(e){ return ''; }
+  }
+  function fmtTime(ms){
+    if(!ms) return '';
+    try{ return new Date(Number(ms)).toLocaleString('en-US',{timeZone:'America/Los_Angeles',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true}); }
+    catch(e){ return ''; }
+  }
+  let PAST = [];
+
+  function rosterTable(ev){
+    const rows = (ev.entries||[]).map(e=>`<tr>
+      <td class="pos">${e.position}</td>
+      <td class="buyer">${esc(e.buyer)}</td>
+      <td class="spots">${e.spots>1?('×'+e.spots):'1'}</td>
+      <td class="ord">${esc(e.orderName || (e.orderId?('#'+String(e.orderId).slice(-8)):''))}</td>
+      <td class="ord">${esc(fmtTime(e.createdAt))}</td>
+      <td>${e.fulfilled?'<span class="done-pill">✓ done</span>':''}</td>
+    </tr>`).join('');
+    return `<table><thead><tr><th>#</th><th>Buyer</th><th>Spots</th><th>Order</th><th>Ordered (PST)</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6" style="color:#748099">No spots.</td></tr>'}</tbody></table>`;
+  }
+
+  function csvFor(ev){
+    const head = ['position','buyer','spots','order','ordered_pst','fulfilled'];
+    const lines = [head.join(',')];
+    for(const e of (ev.entries||[])){
+      const row = [e.position, e.buyer, e.spots, (e.orderName||e.orderId||''), fmtTime(e.createdAt), e.fulfilled?'yes':'no']
+        .map(v=>{ const s=String(v==null?'':v); return /[",\n]/.test(s)?('"'+s.replace(/"/g,'""')+'"'):s; });
+      lines.push(row.join(','));
+    }
+    return lines.join('\n');
+  }
+  function downloadCsv(idx){
+    const ev = PAST[idx]; if(!ev) return;
+    const blob = new Blob([csvFor(ev)], {type:'text/csv'});
+    const a = document.createElement('a');
+    const safe = String(ev.title||'event').replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,40)||'event';
+    a.href = URL.createObjectURL(blob);
+    a.download = 'past-event-'+safe+'.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  }
+  function toggle(idx){
+    const el = document.getElementById('ev-'+idx);
+    if(el) el.classList.toggle('open');
+  }
+
+  function render(){
+    const box = document.getElementById('list');
+    document.getElementById('sub').textContent = PAST.length ? (PAST.length+' archived event'+(PAST.length===1?'':'s')) : '';
+    if(!PAST.length){ box.innerHTML = '<div class="empty">No archived events yet.<br>Finish an event on the queue, then hit “Remove &amp; Archive” to file it here.</div>'; return; }
+    box.innerHTML = PAST.map((ev,i)=>{
+      const type = ev.type==='wta'?'wta':'quack';
+      const label = ev.type==='wta'?'WTA':'QUACK';
+      const count = ev.totalSpots>0 ? `<b>${ev.spotsOrdered}</b>/${ev.totalSpots} spots` : `<b>${ev.spotsOrdered}</b> spots`;
+      return `<div class="ev" id="ev-${i}">
+        <div class="ev-top" onclick="toggle(${i})">
+          <span class="ev-cav">▸</span>
+          <span class="etype ${type}">${label}</span>
+          <span class="ev-name">${esc(ev.title)}</span>
+          <span class="ev-count">${count} · ${ev.entryCount||(ev.entries||[]).length} order${(ev.entryCount||(ev.entries||[]).length)===1?'':'s'}</span>
+          <span class="ev-when">archived ${esc(fmtPST(ev.archivedAt))}</span>
+        </div>
+        <div class="ev-body">
+          ${ev.description?`<div class="ev-desc">${esc(ev.description)}</div>`:''}
+          <div class="ev-actions"><button class="btn" onclick="downloadCsv(${i})">⬇ Export CSV</button></div>
+          ${rosterTable(ev)}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function load(){
+    try{
+      const r = await fetch('/api/past-events', {headers:{'accept':'application/json'}});
+      if(r.status===401 || r.redirected){ document.getElementById('list').innerHTML='<div class="empty">Session expired — <a class="hdr-link" href="{{ADMIN}}">log back in</a>.</div>'; return; }
+      const j = await r.json();
+      PAST = (j.pastEvents||[]);
+      render();
+    }catch(e){
+      document.getElementById('list').innerHTML='<div class="empty">Couldn’t load past events. <button class="hdr-link" onclick="load()">Retry</button></div>';
+    }
+  }
+  load();
+</script>
+</body>
+</html>
