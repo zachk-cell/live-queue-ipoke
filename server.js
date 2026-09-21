@@ -644,7 +644,13 @@ if (shopifyEnabled()) {
 // minute. Unfulfilled orders stay on the board.
 if (queue.perpetual) {
   queue.maybeDailyRollover();
-  const rolloverTimer = setInterval(() => queue.maybeDailyRollover(), 60 * 1000);
+  // Also count any off-top vault orders that have stayed fulfilled past the grace
+  // window (see queue.sweepFulfilledVaults). Same once-a-minute cadence.
+  queue.sweepFulfilledVaults?.();
+  const rolloverTimer = setInterval(() => {
+    queue.maybeDailyRollover();
+    queue.sweepFulfilledVaults?.();
+  }, 60 * 1000);
   rolloverTimer.unref?.();
 }
 

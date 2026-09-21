@@ -36,6 +36,14 @@ const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
 //                window measured from the slot's FIRST order (anchored).
 const COMBINE_MODES = new Set(['always', 'untiltop', 'off', 'time']);
 const DEFAULT_COMBINE_WINDOW_MS = 30 * 60 * 1000; // 30 min ('time' mode only)
+// A vault order fulfilled WITHOUT ever reaching the top still counts toward the
+// vault, but only after it has stayed fulfilled this long — a grace window so a
+// mistaken fulfill that's undone quickly never inflates the count. Env override:
+// VAULT_FULFILL_GRACE_MIN (minutes). Default 10.
+const VAULT_FULFILL_GRACE_MS = (() => {
+  const m = Number(process.env.VAULT_FULFILL_GRACE_MIN);
+  return (Number.isFinite(m) && m >= 0 ? m : 10) * 60 * 1000;
+})();
 
 /**
  * Order record:
@@ -183,6 +191,18 @@ export class QueueEngine extends EventEmitter {
         for (const o of arr) {
           if (o.status === 'queued') this.openBatch.set(o.buyerId, o.batchKey);
         }
+        // Migrate the vault "counted" flag for orders saved before it existed, so
+        // the new fulfill-grace sweep never double-counts or retroactively jumps:
+        //  - anything that already reached the top was counted under the old rule;
+        //  - anything already fulfilled/cancelled is locked as counted (no
+        //    surprise retroactive add) — only fulfills going forward use grace.
+        //  - queued orders that never reached the top stay uncounted, so they
+        //    still count when they reach the top or are fulfilled long enough.
+        for (const o of this.orders.values()) {
+          if (o.vaultCounted === undefined) {
+            o.vaultCounted = !!o.reachedTopAt || o.status === 'fulfilled' || o.status === 'cancelled';
+          }
+        }
         console.log(`[queue] restored ${this.orders.size} orders from disk`);
       }
     } catch (e) {
@@ -275,15 +295,65 @@ export class QueueEngine extends EventEmitter {
     const top = this.activeQueue()[0];
     if (!top) return false;
     const orders = [...this.orders.values()].filter(
-      (o) => o.batchKey === top.key && o.status === 'queued' && !o.reachedTopAt
+      (o) => o.batchKey === top.key && o.status === 'queued'
     );
     if (!orders.length) return false;
     const now = Date.now();
+    let changed = false;
     for (const o of orders) {
-      o.reachedTopAt = now;
-      this._tallyVariants(o);
+      if (!o.reachedTopAt) { o.reachedTopAt = now; changed = true; } // timing stamp (once)
+      if (this._countVaultOnce(o)) changed = true;                    // vault tally (once)
     }
+    return changed;
+  }
+
+  /** Tally an order's vault units toward the counters exactly once, ever. The
+   *  `vaultCounted` flag is the single source of truth shared by BOTH count paths
+   *  (reaching the top, and the fulfill-grace sweep), so an order can never add to
+   *  the vault twice — no matter how it gets counted or how often it re-tops. */
+  _countVaultOnce(order) {
+    if (order.vaultCounted) return false;
+    this._tallyVariants(order);
+    order.vaultCounted = true;
     return true;
+  }
+
+  /** True if any of an order's items match a tracked (vault) variant. */
+  _orderHasVault(order) {
+    if (!this.trackedVariants.length) return false;
+    for (const it of (order.items || [])) {
+      const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
+      for (const v of this.trackedVariants) {
+        const prod = (v.product || '').toLowerCase();
+        const varn = (v.variant || '').toLowerCase();
+        if (varn && (!prod || text.includes(prod)) && text.includes(varn)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Fulfill-grace sweep: a vault order fulfilled WITHOUT ever reaching the top
+   *  still counts, but only once it has stayed fulfilled for VAULT_FULFILL_GRACE_MS
+   *  (so a mistaken fulfill that's undone in time never counts — reopen() clears
+   *  fulfilledAt, dropping it out of this sweep). Runs on boot and every minute.
+   *  Idempotent via the shared vaultCounted flag, so it never double-counts an
+   *  order already tallied at the top. */
+  sweepFulfilledVaults() {
+    if (!this.trackedVariants.length) return 0;
+    const now = Date.now();
+    let counted = 0;
+    for (const o of this.orders.values()) {
+      if (o.status !== 'fulfilled' || o.vaultCounted) continue;
+      if (!o.fulfilledAt || (now - o.fulfilledAt) < VAULT_FULFILL_GRACE_MS) continue;
+      if (!this._orderHasVault(o)) continue;
+      if (this._countVaultOnce(o)) counted++;
+    }
+    if (counted) {
+      this._persist();
+      this.emit('change', { reason: 'vault-fulfill-grace', counted });
+      console.log(`[queue] vault grace: counted ${counted} off-top fulfilled vault order(s)`);
+    }
+    return counted;
   }
 
   /** Add an order's units to any matching tracked-variant counters. Matches on
