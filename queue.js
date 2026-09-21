@@ -1660,10 +1660,12 @@ export class QueueEngine extends EventEmitter {
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     const spotsOrdered = all.reduce((n, e) => n + (Number(e.spots) || 0), 0);
     const spotsUnfulfilled = all.reduce((n, e) => n + (e.status === 'fulfilled' ? 0 : (Number(e.spots) || 0)), 0);
-    // Displayed rows: while the event is OPEN, show every spot (per-slot fulfilled
-    // ones flagged done so the admin keeps them visible). Once the WHOLE event is
-    // ripped/fulfilled, the done spots drop off entirely.
-    const shown = (ev.status === 'ripped') ? all.filter((e) => e.status !== 'fulfilled') : all;
+    // Displayed rows: show every spot (per-slot fulfilled ones flagged done) for
+    // both open AND ripped events, so a fulfilled event keeps its full roster
+    // visible in the admin — you can review it and the count is accurate right up
+    // until you Remove & Archive it. (The overlay never shows ripped events, so
+    // this only affects the admin side.)
+    const shown = all;
     const entries = shown.map((e, i) => ({
       id: e.id,
       position: i + 1,
