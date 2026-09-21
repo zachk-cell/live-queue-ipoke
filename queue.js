@@ -856,7 +856,11 @@ export class QueueEngine extends EventEmitter {
     return { batchKey, buyerId };
   }
 
-  /** Return a held slot to the main queue and bump it to the very top. */
+  /** Return a held slot to the main queue in its NATURAL position — i.e. sorted
+   *  back in by its original order time (and priority), NOT bumped to the top. So
+   *  briefly pulling a slot out and putting it back leaves it right where it was
+   *  (e.g. #3 out and back in stays #3). Any separate manual bump on another slot
+   *  is left untouched. */
   unholdSlot(batchKey) {
     const orders = [...this.orders.values()].filter(
       (o) => o.batchKey === batchKey && o.status === 'held'
@@ -865,14 +869,10 @@ export class QueueEngine extends EventEmitter {
     const buyerId = orders[0].buyerId;
     for (const o of orders) {
       o.status = 'queued';
+      o.bumped = false; // never jump to the top on return — sort by original time
       delete o.heldAt;
     }
     if (!this.openBatch.has(buyerId)) this.openBatch.set(buyerId, batchKey);
-    // Push it to the very top (clears any other bump).
-    for (const o of this.orders.values()) {
-      if (o.batchKey === batchKey && o.status === 'queued') o.bumped = true;
-      else if (o.bumped) o.bumped = false;
-    }
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'unheld', batchKey, buyerId });
