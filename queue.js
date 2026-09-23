@@ -1415,23 +1415,36 @@ export class QueueEngine extends EventEmitter {
   }
 
   /** First OPEN event whose keyword appears in the line item's name/sku/variant.
-   *  Case-insensitive substring. Ripped/closed events never capture new spots,
-   *  and a SOLD-OUT event (spots ordered ≥ its limit) stops capturing too — the
-   *  item then falls through to the main queue rather than overselling. */
+   *  Case-insensitive substring. Ripped/closed events never capture new spots.
+   *  A full event STILL captures matching orders (they're flagged "oversold" in
+   *  the roster) rather than dropping them into the main queue — so an oversell is
+   *  visible and handled, never silently lost. */
   _matchEvent(item) {
     if (!this.events.length) return null;
-    const text = `${item.name || ''} ${item.sku || ''} ${item.variant || ''}`.toLowerCase();
+    const text = this._canon(`${item.name || ''} ${item.sku || ''} ${item.variant || ''}`);
     for (const ev of this.events) {
       if (ev.status && ev.status !== 'open') continue;
       for (const kw of (ev.keywords || [])) {
-        if (kw && text.includes(kw)) {
-          // Enforce the spot limit: once full, don't capture more into it.
-          if (ev.totalSpots > 0 && this._eventSpotsOrdered(ev.id) >= ev.totalSpots) break;
-          return ev;
-        }
+        const k = this._canon(kw);
+        if (k && text.includes(k)) return ev; // capture even past capacity (oversold)
       }
     }
     return null;
+  }
+
+  /** Canonicalize text for keyword matching. Shopify titles use a smart/curly
+   *  apostrophe (U+2019) while keywords typed in the admin use a straight one
+   *  (U+0027) — a plain substring compare would miss those, so fold every
+   *  apostrophe/quote variant and drop apostrophes entirely so "baby's",
+   *  "baby's" and "babys" all match. Also lowercases and collapses whitespace. */
+  _canon(s) {
+    return String(s == null ? '' : s)
+      .toLowerCase()
+      .replace(/[‘’ʼ`´]/g, "'") // smart apostrophes, backtick, acute → '
+      .replace(/[“”]/g, '"')                    // smart double quotes → "
+      .replace(/'/g, '')                                   // drop apostrophes so baby's == babys
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   /** Record one event spot entry (its own line, qty = spot count). Idempotent
@@ -1666,20 +1679,31 @@ export class QueueEngine extends EventEmitter {
     // until you Remove & Archive it. (The overlay never shows ripped events, so
     // this only affects the admin side.)
     const shown = all;
-    const entries = shown.map((e, i) => ({
-      id: e.id,
-      position: i + 1,
-      buyer: this._displayName(e.buyerId, e.buyer),
-      buyerId: e.buyerId,
-      spots: e.spots,
-      itemName: e.itemName,
-      source: e.source || '',
-      orderId: e.orderId,
-      orderName: e.orderName || '',
-      createdAt: e.createdAt,
-      fulfilled: e.status === 'fulfilled',
-      fulfilledAt: e.fulfilledAt || null,
-    }));
+    // Flag oversold entries: walk the roster in purchase order and mark every
+    // spot past the event's capacity as oversold (only when a limit is set).
+    let running = 0;
+    const cap = ev.totalSpots > 0 ? ev.totalSpots : Infinity;
+    const entries = shown.map((e, i) => {
+      const startAt = running;      // spots already taken before this entry
+      running += (Number(e.spots) || 0);
+      return {
+        id: e.id,
+        position: i + 1,
+        buyer: this._displayName(e.buyerId, e.buyer),
+        buyerId: e.buyerId,
+        spots: e.spots,
+        itemName: e.itemName,
+        source: e.source || '',
+        orderId: e.orderId,
+        orderName: e.orderName || '',
+        createdAt: e.createdAt,
+        fulfilled: e.status === 'fulfilled',
+        fulfilledAt: e.fulfilledAt || null,
+        // This entry is oversold if any of its spots land beyond the cap.
+        oversold: startAt >= cap,
+      };
+    });
+    const oversoldSpots = ev.totalSpots > 0 ? Math.max(0, spotsOrdered - ev.totalSpots) : 0;
     return {
       id: ev.id,
       type: ev.type,
@@ -1690,6 +1714,8 @@ export class QueueEngine extends EventEmitter {
       spotsOrdered,
       spotsRemaining: Math.max(0, ev.totalSpots - spotsOrdered),
       soldOut: ev.totalSpots > 0 && spotsOrdered >= ev.totalSpots,
+      oversold: oversoldSpots > 0,
+      oversoldSpots,
       entryCount: entries.length,
       unfulfilledCount: entries.filter((e) => !e.fulfilled).length,
       spotsUnfulfilled,
@@ -1704,7 +1730,8 @@ export class QueueEngine extends EventEmitter {
       return {
         id: ev.id, type: ev.type, title: ev.title, description: ev.description,
         totalSpots: ev.totalSpots, spotsOrdered: q.spotsOrdered, spotsRemaining: q.spotsRemaining,
-        soldOut: q.soldOut, entryCount: q.entryCount,
+        soldOut: q.soldOut, oversold: q.oversold, oversoldSpots: q.oversoldSpots,
+        entryCount: q.entryCount,
         unfulfilledCount: q.unfulfilledCount, spotsUnfulfilled: q.spotsUnfulfilled,
         status: ev.status,
         active: this.activeEventId === ev.id, keywords: ev.keywords,

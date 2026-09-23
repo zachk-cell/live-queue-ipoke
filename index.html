@@ -286,6 +286,11 @@
   .estat{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums}
   .estat .full{color:var(--done);font-weight:800}
   .estat .rem{color:var(--pri);font-weight:700}
+  .estat .over{color:#ff6b6b;font-weight:800}
+  .emini .eminisp .over{color:#ff6b6b;font-weight:800}
+  .oversoldtag{font-size:10px;font-weight:800;letter-spacing:.4px;padding:2px 8px;border-radius:20px;background:#3a0f0f;color:#ff7b7b;border:1px solid #7a2020}
+  .eqrow.over .eqnm{color:#ff9a9a}
+  .eqrow .eqover{font-size:9.5px;font-weight:800;letter-spacing:.3px;padding:1px 6px;border-radius:5px;background:#3a0f0f;color:#ff7b7b;border:1px solid #7a2020;flex:none}
   .eactive{font-size:10px;font-weight:800;letter-spacing:.4px;padding:2px 8px;border-radius:20px;background:#0e2a44;color:#6fb3ff}
   .ebtns{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
   .ebtns button{padding:6px 10px;font-size:12px;border-radius:8px}
@@ -1371,23 +1376,25 @@
     if(!state.perpetual){ return; }
     const box = document.getElementById('events-admin');
     const evs = state.events||[];
-    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.status,e.active,
+    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,
       e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), expandedEvents.has(e.id)?1:0,
-      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')).join('|'):''])]);
+      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.oversold?'O':'')).join('|'):''])]);
     if(!force && box._sig===sig) return;
     box._sig = sig;
     const rowHtml = (e)=>{
       const pct = e.totalSpots>0 ? Math.min(100,Math.round((e.spotsOrdered/e.totalSpots)*100)) : 0;
       const spots = e.totalSpots>0
-        ? (e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
+        ? (e.oversold ? `<span class="over">OVERSOLD ${e.spotsOrdered}/${e.totalSpots} · +${e.oversoldSpots} over</span>`
+          : e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
                      : `${e.spotsOrdered}/${e.totalSpots} spots · <span class="rem">${e.spotsRemaining} left</span>`)
         : `${e.spotsOrdered} spots ordered`;
       const ripped = e.status==='ripped';
       const entries = (e.entries||[]);
-      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}">
+      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}">
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
+          ${en.oversold?'<span class="eqover" title="This spot is beyond the event\\'s spot limit">OVERSOLD</span>':''}
           ${en.createdAt?`<span class="eqtime" title="Order received (PST)">🕒 ${esc(fmtPST(en.createdAt))}</span>`:''}
           <span class="eqord">${esc(en.orderName || (en.orderId?('#'+shortId(en.orderId)):''))}</span>
           ${en.spots>1?`<span class="eqsp">×${en.spots}</span>`:''}
@@ -1399,6 +1406,7 @@
         <div class="etop">
           <span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>
           <span class="ename">${esc(e.title)}</span>
+          ${e.oversold?`<span class="oversoldtag" title="More spots ordered than this event's limit">⚠ OVERSOLD +${e.oversoldSpots}</span>`:''}
           ${e.active?'<span class="eactive">● ON OVERLAY</span>':''}
           ${ripped?'<span class="estat">(ripped)</span>':''}
           <div class="ebtns">
@@ -1412,7 +1420,7 @@
         </div>
         <div class="espots-wrap">
           <div class="estat">${spots}</div>
-          ${e.totalSpots>0?`<div class="espots-meter"><i style="width:${pct}%"></i></div>`:''}
+          ${e.totalSpots>0?`<div class="espots-meter"><i style="width:${pct}%${e.oversold?';background:linear-gradient(90deg,#ff5d5d,#ff9a5d)':''}"></i></div>`:''}
         </div>
         ${e.description?`<div class="ekw">${esc(e.description)}</div>`:''}
         <div class="ekw">🔑 ${(e.keywords||[]).map(esc).join(', ')||'<i>no keywords</i>'}</div>
@@ -1423,7 +1431,8 @@
     // Condensed one-line-per-event view shown when the section is collapsed.
     const miniHtml = (e)=>{
       const spots = e.totalSpots>0
-        ? (e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
+        ? (e.oversold ? `<span class="over">OVERSOLD +${e.oversoldSpots}</span>`
+          : e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
                      : `<span class="rem">${e.spotsRemaining} left</span> / ${e.totalSpots}`)
         : `${e.spotsOrdered} ordered`;
       return `<div class="emini"><span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>`
