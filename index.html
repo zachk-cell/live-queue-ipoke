@@ -1394,7 +1394,7 @@
       const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}">
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
-          ${en.oversold?'<span class="eqover" title="This spot is beyond the event\\'s spot limit">OVERSOLD</span>':''}
+          ${en.oversold?'<span class="eqover" title="This spot is beyond the event spot limit">OVERSOLD</span>':''}
           ${en.createdAt?`<span class="eqtime" title="Order received (PST)">🕒 ${esc(fmtPST(en.createdAt))}</span>`:''}
           <span class="eqord">${esc(en.orderName || (en.orderId?('#'+shortId(en.orderId)):''))}</span>
           ${en.spots>1?`<span class="eqsp">×${en.spots}</span>`:''}
