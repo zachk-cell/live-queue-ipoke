@@ -224,15 +224,17 @@
                   : `${ev.spotsOrdered}/${ev.totalSpots} spots · <span class="rem">${ev.spotsRemaining} left</span>`)
               : `${ev.spotsOrdered} spots ordered`)
           + `</div>`;
-      list.classList.remove('reeling'); reelSig=''; list.style.height=''; // event view isn't a reel
+      // Event view reels through the whole roster just like the main queue when
+      // reel mode is on, so a long side-queue scrolls instead of sitting static.
+      if(REEL){
+        moreEl.textContent = '';
+        if(!ev.entries.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">No spots yet.</div>'; return; }
+        renderReel(ev.entries, evtRowHtml, evtSig);
+        return;
+      }
+      list.classList.remove('reeling'); reelSig=''; list.style.height=''; // static (non-reel) fallback
       const rows = ev.entries.slice(0, ROWS);
-      list.innerHTML = rows.length ? rows.map((e,i)=>`
-        <div class="row${i===0?' top':''}">
-          <span class="pos">${e.position}</span>
-          <span class="nm">${esc(e.buyer)}</span>
-          ${e.spots>1?`<span class="spots">×${e.spots}</span>`:''}
-          ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}
-        </div>`).join('') : '<div class="empty">No spots yet.</div>';
+      list.innerHTML = rows.length ? rows.map((e,i)=>evtRowHtml(e, i===0)).join('') : '<div class="empty">No spots yet.</div>';
       moreEl.textContent = ev.entries.length>rows.length ? `+${ev.entries.length-rows.length} more` : '';
       return;
     }
@@ -272,6 +274,21 @@
       </div>`;
   }
 
+  // One event-roster row (used by both the static view and the reel). `top`
+  // highlights the #1 spot; alt striping keyed off position so it stays stable
+  // as the reel loops.
+  function evtRowHtml(e, top){
+    const alt = (Number(e.position) % 2 === 0) ? ' alt' : '';
+    return `
+      <div class="row${top?' top':''}${alt}">
+        <span class="pos">${e.position}</span>
+        <span class="nm">${esc(e.buyer)}</span>
+        ${e.spots>1?`<span class="spots">×${e.spots}</span>`:''}
+        ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}
+      </div>`;
+  }
+  function evtSig(entries){ return 'evt|' + entries.map(e=>e.id+':'+e.position+':'+e.spots+':'+(e.source||'')+':'+e.buyer).join('|'); }
+
   // ── Reel auto-scroll engine ──────────────────────────────────────────────
   // Renders two identical copies of the full queue stacked in a track, then
   // glides the track upward at a constant speed. When it has moved by exactly
@@ -285,16 +302,18 @@
 
   function queueSig(q){ return q.map(e=>e.key+':'+e.position+':'+(e.prepped?1:0)+':'+(e.isPriority?1:0)+':'+e.buyer).join('|'); }
 
-  function renderReel(q){
+  function renderReel(items, rowFn, sigFn){
+    rowFn = rowFn || rowHtml;
+    sigFn = sigFn || queueSig;
     const list = document.getElementById('list');
     list.classList.add('reeling');
-    const sig = queueSig(q);
+    const sig = sigFn(items);
     if(sig !== reelSig){
       reelSig = sig;
-      const copy = q.map(e=>rowHtml(e, e.position===1)).join('');
+      const copy = items.map(e=>rowFn(e, e.position===1)).join('');
       // Two copies for the seamless wrap.
       list.innerHTML = `<div class="reel-track" id="reelTrack">${copy}${copy}</div>`;
-      sizeReelWindow(q.length); // cap the visible height to ~ROWS rows
+      sizeReelWindow(items.length); // cap the visible height to ~ROWS rows
       measureReel();
       // Keep the scroll position sensible across rebuilds.
       if(reelCopyH>0) reelOffset = reelOffset % reelCopyH; else reelOffset = 0;

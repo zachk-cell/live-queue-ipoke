@@ -114,7 +114,10 @@ function buildEventMessage(queue) {
     } else {
       count = `${ev.spotsOrdered} spots ordered`;
     }
-    lines.push(`\`${type}\` **${ev.title}** · ${count}`);
+    // Non-destructive spotlight marker: shows which event is currently on the
+    // stream overlay, without hiding or reordering anything else.
+    const liveTag = ev.active ? ' 🔴 **LIVE — on stream now**' : '';
+    lines.push(`\`${type}\` **${ev.title}**${liveTag} · ${count}`);
   }
   lines.push('');
   lines.push('_↳ Full rosters are in the thread on this message._');
@@ -132,7 +135,8 @@ function buildEventRosters(queue) {
   const out = [];
   for (const ev of events) {
     const type = ev.type === 'wta' ? 'WTA' : 'Quack';
-    out.push(`\`${type}\` **${ev.title}** — ${ev.spotsOrdered}${ev.totalSpots > 0 ? '/' + ev.totalSpots : ''} spots`);
+    const liveTag = ev.active ? ' 🔴 **LIVE**' : '';
+    out.push(`\`${type}\` **${ev.title}**${liveTag} — ${ev.spotsOrdered}${ev.totalSpots > 0 ? '/' + ev.totalSpots : ''} spots`);
     const entries = ev.entries || [];
     if (!entries.length) out.push('_No spots yet._');
     else for (const e of entries) {
