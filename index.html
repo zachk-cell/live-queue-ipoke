@@ -1140,10 +1140,10 @@
     box.innerHTML = `<div class="hcard${heldCollapsed?' collapsed':''}">
       <h3 onclick="toggleHeldPanel()"><span class="hcav">▾</span>⏸ On hold <span style="color:#ffce7a">(${held.length})</span></h3>
       <div class="hbody">
-        <p class="hsub">Set aside off the main queue. "To top" returns an order to position&nbsp;1.</p>
+        <p class="hsub">Set aside off the main queue. "Return" puts an order back in its normal queue position.</p>
         ${held.map(h=>`<div class="hrow">
           <span class="hnm">${esc(h.buyer)}${h.sourceShort?` <span class="srcbadge ${esc(h.sourceShort)}">${esc(h.sourceShort)}</span>`:''}</span>
-          <button class="htotop" onclick="unholdOrder('${esc(h.key)}')">↩ To top</button>
+          <button class="htotop" onclick="unholdOrder('${esc(h.key)}')" title="Return this order to its normal position in the queue">↩ Return</button>
           <span class="hord">${(h.orderNames||[]).map(n=>esc(n)).join('  ')}</span>
         </div>`).join('')}
       </div>
