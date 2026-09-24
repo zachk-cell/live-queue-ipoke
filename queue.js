@@ -294,6 +294,19 @@ export class QueueEngine extends EventEmitter {
         if (n) console.log(`[queue] un-combined ${n} order(s) on boot (combine mode off)`);
       }
     } catch (e) { console.warn('[queue] boot un-combine failed:', e.message); }
+    // Clear stale TikTok auto-holds on boot. TikTok orders sync into Shopify as
+    // ON_HOLD by default, which we no longer treat as a real hold — but orders
+    // ingested before that change kept the flag. The onHold boolean is only ever
+    // set from Shopify's fulfillment status (the manual set-aside uses status
+    // 'held' instead), so clearing it here for TikTok orders is safe and removes
+    // the backlog of noise badges in one pass.
+    try {
+      let cleared = 0;
+      for (const o of this.orders.values()) {
+        if (o.onHold && /tiktok|^tt$/i.test(String(o.source || ''))) { o.onHold = false; cleared++; }
+      }
+      if (cleared) console.log(`[queue] cleared ${cleared} stale TikTok auto-hold flag(s) on boot`);
+    } catch (e) { console.warn('[queue] boot hold-clear failed:', e.message); }
     // Recompute priority flags in case the env extras changed matching, then save.
     for (const o of this.orders.values()) o.hasPriority = this._isPriorityOrder(o.items);
     this._persist();
