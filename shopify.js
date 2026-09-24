@@ -461,16 +461,22 @@ export async function eventSyncCandidates(queue) {
   const variants = await fetchEventVariants();
   const existing = (queue.events || []);
   const bySrc = new Set(existing.map((e) => e.sourceVariantId).filter(Boolean).map(String));
-  const byText = new Set();
+  // Exact canonical titles of existing events, plus their keywords. A variant is
+  // already covered if an existing event's keyword is a SUBSTRING of the variant
+  // title — that's exactly how _matchEvent routes orders, so if orders for this
+  // variant would already land in an existing event, we don't offer it again.
+  const titleSet = new Set(existing.map((e) => _canonKw(e.title || '')).filter(Boolean));
+  const kwList = [];
   for (const e of existing) {
-    if (e.title) byText.add(_canonKw(e.title));
-    for (const k of (e.keywords || [])) byText.add(_canonKw(k));
+    for (const k of (e.keywords || [])) { const c = _canonKw(k); if (c) kwList.push(c); }
   }
   const candidates = [];
   let alreadyLinked = 0;
   for (const v of variants) {
     if (!v.variantTitle) continue;
-    if (bySrc.has(String(v.variantId)) || byText.has(_canonKw(v.variantTitle))) { alreadyLinked++; continue; }
+    const cv = _canonKw(v.variantTitle);
+    const linked = bySrc.has(String(v.variantId)) || titleSet.has(cv) || kwList.some((k) => cv.includes(k));
+    if (linked) { alreadyLinked++; continue; }
     candidates.push({
       variantId: v.variantId,
       productId: v.productId,
