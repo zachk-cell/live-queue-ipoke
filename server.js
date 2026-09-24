@@ -18,7 +18,7 @@ import { authenticator } from 'otplib';
 
 import { QueueEngine } from './queue.js';
 import { tiktokEnabled, mountAuth, startPolling, tiktokBoot, tiktokStatus, tiktokTokensForEnv, debugShops, refetchShopCipher, debugRawOrder, debugCancellations } from './tiktok.js';
-import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder } from './shopify.js';
+import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck } from './shopify.js';
 import { startDiscord, discordEnabled } from './discord.js';
 import { startSimulator } from './simulator.js';
 
@@ -409,6 +409,11 @@ app.post('/api/overlay-setting', requireAuth, (req, res) => {
 app.get('/api/shopify-status', requireAuth, (_req, res) => res.json(shopifyStatus()));
 app.get('/api/shopify-raw-order', requireAuth, async (_req, res) => {
   try { res.json(await shopifyDebugRawOrder()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Force a fresh token and report which scopes are now granted + live read-probes.
+app.get('/api/shopify-scope-check', requireAuth, async (_req, res) => {
+  try { res.json(await shopifyScopeCheck()); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

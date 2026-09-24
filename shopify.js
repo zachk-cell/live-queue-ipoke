@@ -65,8 +65,8 @@ async function getAccessToken(force = false) {
     lastError = 'token exchange failed: ' + (body.error_description || body.error || ('HTTP ' + res.status));
     throw new Error(lastError);
   }
-  _token = { value: body.access_token, exp: now + (Number(body.expires_in) || 86399) * 1000 };
-  console.log('[shopify] access token refreshed (client credentials); valid ~', Math.round((_token.exp - now) / 60000), 'min');
+  _token = { value: body.access_token, exp: now + (Number(body.expires_in) || 86399) * 1000, scope: body.scope || '' };
+  console.log('[shopify] access token refreshed (client credentials); valid ~', Math.round((_token.exp - now) / 60000), 'min; scopes:', _token.scope || '(none reported)');
   return _token.value;
 }
 
@@ -336,6 +336,32 @@ export function startShopifyPolling(queue) {
   const timer = setInterval(poll, POLL_MS);
   timer.unref?.();
   console.log(`[shopify] polling every ${POLL_MS}ms${PERPETUAL ? ' (perpetual, 24/7)' : ' while live'}; boot lookback ${BOOT_LOOKBACK_MIN}min`);
+}
+
+// Force a fresh token and report exactly which scopes the app now holds, plus
+// live read-probes so we can confirm read_products / read_locations actually
+// work (not just that they're listed). Admin-only route consumes this. Read-only.
+export async function shopifyScopeCheck() {
+  if (ADMIN_TOKEN) {
+    return { authMode: 'static-token', note: 'Legacy static token — scopes are fixed on the token itself, not re-fetchable here.', probes: await _scopeProbes() };
+  }
+  await getAccessToken(true); // force refresh so a just-released scope is reflected
+  const granted = String(_token.scope || '').split(/[\s,]+/).filter(Boolean);
+  const wanted = ['read_orders', 'read_customers', 'read_products', 'read_inventory', 'read_locations'];
+  const has = {};
+  for (const w of wanted) has[w] = granted.includes(w);
+  return { authMode: 'client-credentials', grantedScopes: granted, has, probes: await _scopeProbes() };
+}
+
+async function _scopeProbes() {
+  const out = {};
+  try { await gql(`{ products(first: 1) { nodes { id } } }`); out.products = 'ok'; }
+  catch (e) { out.products = 'FAIL: ' + String(e.message || e).slice(0, 140); }
+  try { await gql(`{ locations(first: 1) { nodes { id name } } }`); out.locations = 'ok'; }
+  catch (e) { out.locations = 'FAIL: ' + String(e.message || e).slice(0, 140); }
+  try { await gql(`{ inventoryItems(first: 1) { nodes { id } } }`); out.inventory = 'ok'; }
+  catch (e) { out.inventory = 'FAIL: ' + String(e.message || e).slice(0, 140); }
+  return out;
 }
 
 // ---------------- Status + diagnostics ----------------
