@@ -187,7 +187,13 @@ export function normalizeShopifyOrder(o) {
     items,
     total: money(o.currentTotalPriceSet || o.totalPriceSet),
     createdAt: o.processedAt || o.createdAt ? Date.parse(o.processedAt || o.createdAt) : Date.now(),
-    onHold: String(o.displayFulfillmentStatus || '').toUpperCase() === 'ON_HOLD',
+    // On-hold badge: TikTok orders sync into Shopify as ON_HOLD by default (the
+    // TikTok channel holds fulfillment), so that status is meaningless noise for
+    // this channel — it would flag nearly every TikTok order. Only treat ON_HOLD
+    // as a real hold for non-TikTok (web) orders, where it reflects a deliberate
+    // merchant hold. (The manual set-aside "held" list is separate from this.)
+    onHold: channelLabel(o.sourceName) !== 'TikTok'
+      && String(o.displayFulfillmentStatus || '').toUpperCase() === 'ON_HOLD',
     // Where the order originated, for the on-slot badge + CSV. Everything comes
     // via Shopify, but this preserves the TikTok-vs-web distinction (engine maps
     // to TT/SF).
@@ -313,7 +319,11 @@ export function startShopifyPolling(queue) {
         const nodes = await fetchOrdersMatching(idClause, Math.min(shopQueued.length, 100)).catch(() => []);
         for (const node of nodes) {
           const id = 'shop:' + numericId(node.id);
-          const held = String(node.displayFulfillmentStatus || '').toUpperCase() === 'ON_HOLD';
+          // TikTok orders are ON_HOLD by default (channel-managed fulfillment) —
+          // that's not a real hold, so never flag them. Clears any that were
+          // previously (wrongly) flagged. Web orders honor the real status.
+          const held = channelLabel(node.sourceName) !== 'TikTok'
+            && String(node.displayFulfillmentStatus || '').toUpperCase() === 'ON_HOLD';
           if (queue.setHold(id, held)) {
             console.log('[shopify] order', node.name || id, held ? 'ON HOLD' : 'hold cleared');
           }

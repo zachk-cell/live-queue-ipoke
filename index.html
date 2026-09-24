@@ -675,7 +675,7 @@
     if(e.priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
     // Same-name distinction: if another buyer in the queue shares this exact
     // display name, print a last-4 id tag so the right bag goes to the right person.
-    const dupe = (state.queue||[]).filter(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase()).length>1;
+    const dupe = (state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
     const idTag = dupe ? ('id …'+String(e.buyerId||'').slice(-4)) : '';
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page{size:2.25in 1.25in;margin:0}
@@ -952,12 +952,17 @@
     // Detect buyers who share an identical display name with ANOTHER buyer in
     // the queue (different people, same TikTok name). Count over the WHOLE queue
     // so a search filter never hides a duplicate. (#4)
-    const nameCounts = {};
-    for(const e of (state.queue||[])){ const n=(e.buyer||'').toLowerCase(); nameCounts[n]=(nameCounts[n]||0)+1; }
+    // Flag a name as a duplicate only when DIFFERENT buyers share it — i.e. two
+    // distinct buyer ids with the same display name (genuinely different people).
+    // With auto-combine off, one buyer legitimately has several slots; counting
+    // by name alone would wrongly flag those repeats as a "same name" collision.
+    // Keying off distinct buyer ids fixes that: same person's repeats never flag.
+    const nameIds = {};
+    for(const e of (state.queue||[])){ const n=(e.buyer||'').toLowerCase(); (nameIds[n]=nameIds[n]||new Set()).add(e.buyerId); }
     // Search matches buyer name OR a whole/partial order number.
     const list = (state.queue||[]).filter(e=>!filter || e.buyer.toLowerCase().includes(filter) || matchOrderNo(e));
     for(const e of list){
-      e._dupName = nameCounts[(e.buyer||'').toLowerCase()]>1;
+      e._dupName = (nameIds[(e.buyer||'').toLowerCase()] ? nameIds[(e.buyer||'').toLowerCase()].size : 0) > 1;
       e._idTag = e._dupName ? String(e.buyerId||'').slice(-4) : '';
     }
     // Combine helper: when the operator has selected one or more slots, highlight
