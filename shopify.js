@@ -336,6 +336,18 @@ export function startShopifyPolling(queue) {
   const timer = setInterval(poll, POLL_MS);
   timer.unref?.();
   console.log(`[shopify] polling every ${POLL_MS}ms${PERPETUAL ? ' (perpetual, 24/7)' : ' while live'}; boot lookback ${BOOT_LOOKBACK_MIN}min`);
+
+  // Periodic event auto-sync: pull newly-listed quacks/WTAs from the catalog
+  // into events automatically. Default every 5 min; set EVENT_AUTOSYNC_MS=0 to
+  // disable. Runs once shortly after boot too, so a restart catches up fast.
+  const AUTO_SYNC_MS = Number.isFinite(Number(process.env.EVENT_AUTOSYNC_MS))
+    ? Number(process.env.EVENT_AUTOSYNC_MS) : 300000;
+  if (AUTO_SYNC_MS > 0) {
+    const t2 = setInterval(() => { autoSyncEvents(queue); }, AUTO_SYNC_MS);
+    t2.unref?.();
+    setTimeout(() => { autoSyncEvents(queue); }, 20000);
+    console.log(`[shopify] event auto-sync every ${Math.round(AUTO_SYNC_MS / 1000)}s`);
+  }
 }
 
 // Force a fresh token and report exactly which scopes the app now holds, plus
@@ -488,6 +500,39 @@ export async function eventSyncCandidates(queue) {
     });
   }
   return { ok: true, scannedVariants: variants.length, alreadyLinked, candidates };
+}
+
+// Periodic auto-sync: create events for any new active event-variant without
+// one, using on_hand as the seat count (untracked → blank). addEvent is
+// idempotent on the Shopify variant id, so this never duplicates an event a
+// human already added or a previous run created. Errors are swallowed (e.g. a
+// transient API hiccup) so they never disturb the order poller.
+let _lastAutoSyncWarn = '';
+export async function autoSyncEvents(queue) {
+  let added = 0;
+  try {
+    const { candidates } = await eventSyncCandidates(queue);
+    for (const c of (candidates || [])) {
+      const before = queue.events.length;
+      queue.addEvent({
+        type: c.type || 'quack',
+        title: c.title,
+        description: '',
+        totalSpots: (c.onHand != null ? c.onHand : 0),
+        keywords: [c.keyword],
+        sourceVariantId: c.variantId,
+        sourceProductId: c.productId,
+      });
+      if (queue.events.length > before) {
+        added++;
+        console.log(`[shopify] auto-synced new event: ${c.title} (seats ${c.onHand != null ? c.onHand : 'untracked'})`);
+      }
+    }
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (msg !== _lastAutoSyncWarn) { console.warn('[shopify] event auto-sync skipped:', msg); _lastAutoSyncWarn = msg; }
+  }
+  return added;
 }
 
 // Admin-only probe: pull a few recent orders and surface exactly what Shopify

@@ -1472,6 +1472,14 @@ export class QueueEngine extends EventEmitter {
   }
 
   addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId } = {}) {
+    // Idempotent on Shopify variant: if an event for this variant already exists
+    // (from an earlier manual add or the periodic auto-sync), don't create a
+    // duplicate — return the existing one. Manual events (no sourceVariantId)
+    // are never deduped this way.
+    if (sourceVariantId) {
+      const dup = this.events.find((e) => e.sourceVariantId && String(e.sourceVariantId) === String(sourceVariantId));
+      if (dup) return dup;
+    }
     const t = (String(type || '').toLowerCase() === 'wta') ? 'wta' : 'quack';
     const ev = {
       id: `ev${++this.eventCounter}`,
