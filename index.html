@@ -1490,7 +1490,7 @@
     const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,
       e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), expandedEvents.has(e.id)?1:0,
-      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.oversold?'O':'')).join('|'):''])]);
+      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
     if(!force && box._sig===sig) return;
     box._sig = sig;
     const rowHtml = (e)=>{
@@ -1505,7 +1505,7 @@
       const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}">
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
-          ${en.oversold?'<span class="eqover" title="This spot is beyond the event spot limit">OVERSOLD</span>':''}
+          ${en.oversold?`<span class="eqover" title="${en.oversoldPartial?(en.oversoldSpotsInEntry+' of the '+en.spots+' spots in this order are beyond the seat limit'):'Beyond the event seat limit'}">OVERSOLD${(en.oversoldSpotsInEntry>1||en.oversoldPartial)?(' ×'+en.oversoldSpotsInEntry):''}</span>`:''}
           ${en.createdAt?`<span class="eqtime" title="Order received (PST)">🕒 ${esc(fmtPST(en.createdAt))}</span>`:''}
           <span class="eqord">${esc(en.orderName || (en.orderId?('#'+shortId(en.orderId)):''))}</span>
           ${en.spots>1?`<span class="eqsp">×${en.spots}</span>`:''}

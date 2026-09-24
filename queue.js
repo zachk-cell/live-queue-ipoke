@@ -1705,13 +1705,18 @@ export class QueueEngine extends EventEmitter {
     // until you Remove & Archive it. (The overlay never shows ripped events, so
     // this only affects the admin side.)
     const shown = all;
-    // Flag oversold entries: walk the roster in purchase order and mark every
-    // spot past the event's capacity as oversold (only when a limit is set).
+    // Flag oversold entries: walk the roster in purchase order and mark any entry
+    // that holds one or more spots past the event's capacity (only when a limit
+    // is set). An entry whose spots STRADDLE the cap (some within, some beyond —
+    // e.g. a 4-spot order landing on seats 39–42 of a 40-cap event) is still
+    // flagged, since it contains the oversold seat(s); oversoldSpotsInEntry says
+    // how many of its spots are over, and oversoldPartial marks the straddler.
     let running = 0;
     const cap = ev.totalSpots > 0 ? ev.totalSpots : Infinity;
     const entries = shown.map((e, i) => {
-      const startAt = running;      // spots already taken before this entry
-      running += (Number(e.spots) || 0);
+      const sp = Number(e.spots) || 0;
+      running += sp;                       // running is now this entry's end position
+      const overInEntry = (running > cap) ? Math.min(sp, running - cap) : 0;
       return {
         id: e.id,
         position: i + 1,
@@ -1725,8 +1730,10 @@ export class QueueEngine extends EventEmitter {
         createdAt: e.createdAt,
         fulfilled: e.status === 'fulfilled',
         fulfilledAt: e.fulfilledAt || null,
-        // This entry is oversold if any of its spots land beyond the cap.
-        oversold: startAt >= cap,
+        // Oversold if any of this entry's spots land beyond the cap.
+        oversold: overInEntry > 0,
+        oversoldSpotsInEntry: overInEntry,          // how many of its spots are over
+        oversoldPartial: overInEntry > 0 && overInEntry < sp, // straddles the cap line
       };
     });
     const oversoldSpots = ev.totalSpots > 0 ? Math.max(0, spotsOrdered - ev.totalSpots) : 0;
