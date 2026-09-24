@@ -274,6 +274,23 @@
   .emini .eminisp .full{color:var(--done);font-weight:800}
   .ecard .eh .eh-btns{margin-left:auto;display:flex;align-items:center;gap:10px}
   .ecard .eh .eh-btns .eadd{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:7px 12px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .ecard .eh .eh-btns .esync{background:#123a2a;border:1px solid #1c5133;color:#57e0a6;font-weight:700;padding:7px 12px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .ecard .eh .eh-btns .esync:hover{filter:brightness(1.15)}
+  .ecard .eh .eh-btns .esync:disabled{opacity:.6;cursor:default}
+  /* Sync review modal */
+  #syncModal .card{max-width:640px;width:calc(100vw - 40px)}
+  .sync-sub{color:var(--muted);font-size:12.5px;margin:2px 0 10px}
+  .sync-list{max-height:min(60vh,440px);overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin:6px 0 4px}
+  .sync-row{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;background:#171a21;border:1px solid #272c38;border-radius:10px;padding:9px 11px}
+  .sync-row.off{opacity:.45}
+  .sync-row input[type=checkbox]{width:17px;height:17px;flex:none;cursor:pointer}
+  .sync-nm{font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sync-kw{color:#748099;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sync-row select{background:#0f1115;color:var(--text);border:1px solid #272c38;border-radius:7px;padding:5px 7px;font-size:12px}
+  .sync-seats{width:74px;background:#0f1115;color:var(--text);border:1px solid #272c38;border-radius:7px;padding:5px 7px;font-size:12px;text-align:center}
+  .sync-seats::placeholder{color:#5a627a}
+  .sync-empty{color:var(--muted);font-size:14px;text-align:center;padding:26px 10px}
+  .sync-onhand{font-size:10px;color:#57e0a6;font-weight:700}
   .ecard .eh .epast{color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;white-space:nowrap}
   .ecard .eh .epast:hover{text-decoration:underline}
   .erow{border-top:1px solid #21262f;padding:10px 0}
@@ -495,6 +512,19 @@
     <div class="row">
       <button class="ghost" onclick="closeEvent()">Cancel</button>
       <button class="primary" onclick="saveEvent()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- iPoke: Sync-from-Shopify review modal -->
+<div class="modal" id="syncModal">
+  <div class="card">
+    <h3>⟳ Sync from Shopify</h3>
+    <p class="sync-sub" id="sync-sub">Looking for new quacks & WTAs in your store…</p>
+    <div class="sync-list" id="sync-list"></div>
+    <div class="row">
+      <button class="ghost" onclick="closeSync()">Cancel</button>
+      <button class="primary" id="sync-add-btn" onclick="addSyncSelected()" disabled>Add selected</button>
     </div>
   </div>
 </div>
@@ -1331,6 +1361,82 @@
     else await postJSON('/api/events', body);
     closeEvent();
   }
+
+  // ── Sync from Shopify (auto-detect events from the store catalog) ──
+  let syncCandidates = [];
+  async function openSync(){
+    syncCandidates = [];
+    document.getElementById('sync-sub').textContent = 'Looking for new quacks & WTAs in your store…';
+    document.getElementById('sync-list').innerHTML = '<div class="sync-empty">Loading…</div>';
+    document.getElementById('sync-add-btn').disabled = true;
+    document.getElementById('syncModal').classList.add('open');
+    try{
+      const r = await fetch('/api/events-sync/preview?ts='+Date.now(), {headers:{'accept':'application/json'}});
+      const j = await r.json();
+      if(!j || !j.ok) throw new Error((j&&j.error)||'Sync failed');
+      syncCandidates = j.candidates || [];
+      renderSyncList(j);
+    }catch(e){
+      document.getElementById('sync-sub').textContent = '';
+      document.getElementById('sync-list').innerHTML = '<div class="sync-empty">Couldn’t reach Shopify: '+esc(String(e.message||e))+'<br><br>Check that read_products is granted, then try again.</div>';
+    }
+  }
+  function renderSyncList(j){
+    const list = document.getElementById('sync-list');
+    const sub = document.getElementById('sync-sub');
+    const cands = syncCandidates;
+    if(!cands.length){
+      sub.textContent = '';
+      const linked = (j && j.alreadyLinked) ? (' '+j.alreadyLinked+' already have events.') : '';
+      list.innerHTML = '<div class="sync-empty">No new events found in the store.'+linked+'</div>';
+      document.getElementById('sync-add-btn').disabled = true;
+      return;
+    }
+    // Seed editable defaults onto each candidate.
+    cands.forEach(c=>{ c.seats = (c.onHand!=null ? String(c.onHand) : ''); c._on = true; });
+    sub.textContent = 'Found '+cands.length+' new '+(cands.length===1?'event':'events')+(j.alreadyLinked?(' · '+j.alreadyLinked+' already added'):'')+'. Pick which to add — seats prefilled from Shopify on-hand (blank = untracked, tracks orders immediately).';
+    list.innerHTML = cands.map((c,i)=>`<div class="sync-row" id="sync-row-${i}">
+      <input type="checkbox" checked onchange="syncRowToggle(${i})" />
+      <div style="min-width:0">
+        <div class="sync-nm">${esc(c.title)}</div>
+        <div class="sync-kw">🔑 ${esc(c.keyword)}${c.onHand!=null?' · <span class="sync-onhand">on-hand '+c.onHand+'</span>':''}</div>
+      </div>
+      <select onchange="syncCandidates[${i}].type=this.value">
+        <option value="quack"${c.type!=='wta'?' selected':''}>Quack</option>
+        <option value="wta"${c.type==='wta'?' selected':''}>WTA</option>
+      </select>
+      <input class="sync-seats" type="number" min="0" placeholder="—" value="${c.onHand!=null?c.onHand:''}" oninput="syncCandidates[${i}].seats=this.value" title="Seats (blank = untracked)" />
+    </div>`).join('');
+    document.getElementById('sync-add-btn').disabled = false;
+  }
+  function syncRowToggle(i){
+    if(!syncCandidates[i]) return;
+    syncCandidates[i]._on = !syncCandidates[i]._on;
+    const row = document.getElementById('sync-row-'+i);
+    if(row) row.classList.toggle('off', !syncCandidates[i]._on);
+    document.getElementById('sync-add-btn').disabled = !syncCandidates.some(c=>c._on);
+  }
+  function closeSync(){ document.getElementById('syncModal').classList.remove('open'); }
+  async function addSyncSelected(){
+    const btn = document.getElementById('sync-add-btn');
+    const chosen = syncCandidates.filter(c=>c._on);
+    if(!chosen.length) return;
+    btn.disabled = true; btn.textContent = 'Adding…';
+    for(const c of chosen){
+      const seats = (c.seats===''||c.seats==null) ? 0 : Math.max(0, Math.floor(Number(c.seats)||0));
+      await postJSON('/api/events', {
+        type: c.type||'quack',
+        title: c.title,
+        description: '',
+        totalSpots: seats,
+        keywords: [c.keyword],
+        sourceVariantId: c.variantId,
+        sourceProductId: c.productId,
+      });
+    }
+    btn.textContent = 'Add selected';
+    closeSync();
+  }
   async function toggleEventActive(id, on){ await postJSON('/api/events/'+encodeURIComponent(id)+'/active',{active:on}); }
   async function ripEventUI(id){
     const ev=(state.events||[]).find(e=>e.id===id);
@@ -1443,7 +1549,7 @@
     box.innerHTML = `<div class="ecard${eventsCollapsed?' collapsed':''}">
       <div class="eh">
         <h3 onclick="toggleEventsCollapse()" title="Collapse / expand this section"><span class="ecav">▾</span>🎟 Events &amp; side-queues</h3>
-        <div class="eh-btns"><a href="{{ADMIN}}/events" target="_blank" class="epast" title="View finished events you've archived">🗂 Past events ↗</a><button class="eadd" onclick="openEvent()">＋ Add event</button></div></div>
+        <div class="eh-btns"><a href="{{ADMIN}}/events" target="_blank" class="epast" title="View finished events you've archived">🗂 Past events ↗</a><button class="esync" onclick="openSync()" title="Find new quacks & WTAs in your Shopify store and add them as events">⟳ Sync from Shopify</button><button class="eadd" onclick="openEvent()">＋ Add event</button></div></div>
       ${eventsCollapsed
         ? `<div class="emini-list">${evs.length ? evs.map(miniHtml).join('') : '<div style="color:#748099;font-size:12.5px">No events yet.</div>'}</div>`
         : (evs.length ? evs.map(rowHtml).join('') : '<div style="color:#748099;font-size:13px;padding:6px 0">No events yet. Add one when a Quack Pack or WTA goes up.</div>')}

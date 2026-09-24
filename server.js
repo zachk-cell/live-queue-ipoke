@@ -18,7 +18,7 @@ import { authenticator } from 'otplib';
 
 import { QueueEngine } from './queue.js';
 import { tiktokEnabled, mountAuth, startPolling, tiktokBoot, tiktokStatus, tiktokTokensForEnv, debugShops, refetchShopCipher, debugRawOrder, debugCancellations } from './tiktok.js';
-import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck } from './shopify.js';
+import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates } from './shopify.js';
 import { startDiscord, discordEnabled } from './discord.js';
 import { startSimulator } from './simulator.js';
 
@@ -415,6 +415,11 @@ app.get('/api/shopify-raw-order', requireAuth, async (_req, res) => {
 app.get('/api/shopify-scope-check', requireAuth, async (_req, res) => {
   try { res.json(await shopifyScopeCheck()); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Sync preview: event-product variants in Shopify that don't yet have an event.
+app.get('/api/events-sync/preview', requireAuth, async (_req, res) => {
+  try { res.json(await eventSyncCandidates(queue)); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // Inject a synthetic order for testing label printing / the panel. Admin only.

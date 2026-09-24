@@ -1471,7 +1471,7 @@ export class QueueEngine extends EventEmitter {
     return entry;
   }
 
-  addEvent({ type, title, description, totalSpots, keywords } = {}) {
+  addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId } = {}) {
     const t = (String(type || '').toLowerCase() === 'wta') ? 'wta' : 'quack';
     const ev = {
       id: `ev${++this.eventCounter}`,
@@ -1482,6 +1482,11 @@ export class QueueEngine extends EventEmitter {
       keywords: this._normKeywords(keywords),
       status: 'open',
       createdAt: Date.now(),
+      // Shopify origin (set when created via "Sync from Shopify") so re-syncing
+      // dedups against variants that already have an event. Undefined for
+      // manually-added events.
+      ...(sourceVariantId ? { sourceVariantId: String(sourceVariantId) } : {}),
+      ...(sourceProductId ? { sourceProductId: String(sourceProductId) } : {}),
     };
     this.events.push(ev);
     this._persist();

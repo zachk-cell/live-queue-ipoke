@@ -380,6 +380,110 @@ export function shopifyStatus() {
   };
 }
 
+// ---------------- Event sync (iPoke quacks / WTAs) ----------------
+// Events are VARIANTS of a single product (e.g. "iPokeTCG Quack Pack Series").
+// Each variant is one quack or WTA. We read that product's variants and their
+// on_hand inventory, then turn each into a candidate event for the admin's
+// "Sync from Shopify" review list. Requires read_products (+ read_inventory /
+// read_locations for the on_hand seat default).
+const EVENT_TITLE_MATCH = (process.env.EVENT_PRODUCT_TITLE_MATCH || 'quack pack series').toLowerCase();
+
+// Mirror queue._canon so dedup here matches the engine's keyword matching:
+// lowercase, fold apostrophes away, collapse whitespace.
+function _canonKw(s) {
+  return String(s == null ? '' : s)
+    .toLowerCase()
+    .replace(/[‘’ʼ`´]/g, "'")
+    .replace(/'/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _inferEventType(title) {
+  return /\bwta\b|winner[\s-]?takes?[\s-]?all/i.test(String(title || '')) ? 'wta' : 'quack';
+}
+
+// Pull the event product(s) and enumerate their variants with on_hand totals.
+async function fetchEventVariants() {
+  const data = await gql(
+    `query($q: String!) {
+       products(first: 30, query: $q) {
+         nodes {
+           id title status
+           variants(first: 100) {
+             nodes {
+               id title
+               inventoryItem {
+                 id tracked
+                 inventoryLevels(first: 20) { nodes { quantities(names: ["on_hand"]) { name quantity } } }
+               }
+             }
+           }
+         }
+       }
+     }`,
+    { q: `title:*${EVENT_TITLE_MATCH}*` },
+  );
+  const products = (data && data.products && data.products.nodes) || [];
+  const out = [];
+  for (const p of products) {
+    // Guard the wildcard search and skip draft/archived products.
+    if (!String(p.title || '').toLowerCase().includes(EVENT_TITLE_MATCH)) continue;
+    if (p.status && p.status !== 'ACTIVE') continue;
+    for (const v of ((p.variants && p.variants.nodes) || [])) {
+      let onHand = null;
+      const inv = v.inventoryItem;
+      if (inv && inv.tracked) {
+        let sum = 0, seen = false;
+        for (const lvl of ((inv.inventoryLevels && inv.inventoryLevels.nodes) || [])) {
+          for (const q of (lvl.quantities || [])) {
+            if (q && q.name === 'on_hand') { sum += Number(q.quantity) || 0; seen = true; }
+          }
+        }
+        if (seen) onHand = sum;
+      }
+      out.push({
+        productId: numericId(p.id),
+        productTitle: p.title,
+        variantId: numericId(v.id),
+        variantTitle: (v.title || '').trim(),
+        onHand, // null when the variant isn't inventory-tracked → seats left blank
+      });
+    }
+  }
+  return out;
+}
+
+// Build the review list: every event-product variant that doesn't already have
+// a matching event (deduped by Shopify variant id, or by canonicalized title/
+// keyword so manually-created events aren't offered again).
+export async function eventSyncCandidates(queue) {
+  const variants = await fetchEventVariants();
+  const existing = (queue.events || []);
+  const bySrc = new Set(existing.map((e) => e.sourceVariantId).filter(Boolean).map(String));
+  const byText = new Set();
+  for (const e of existing) {
+    if (e.title) byText.add(_canonKw(e.title));
+    for (const k of (e.keywords || [])) byText.add(_canonKw(k));
+  }
+  const candidates = [];
+  let alreadyLinked = 0;
+  for (const v of variants) {
+    if (!v.variantTitle) continue;
+    if (bySrc.has(String(v.variantId)) || byText.has(_canonKw(v.variantTitle))) { alreadyLinked++; continue; }
+    candidates.push({
+      variantId: v.variantId,
+      productId: v.productId,
+      productTitle: v.productTitle,
+      title: v.variantTitle,
+      type: _inferEventType(v.variantTitle),
+      keyword: v.variantTitle,
+      onHand: v.onHand,
+    });
+  }
+  return { ok: true, scannedVariants: variants.length, alreadyLinked, candidates };
+}
+
 // Admin-only probe: pull a few recent orders and surface exactly what Shopify
 // returns — how a TikTok-synced order looks vs a native web order (buyer, source
 // channel, line items). Full names/emails are masked so the route never leaks PII.
