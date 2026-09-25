@@ -1,146 +1,133 @@
-# TCG Live Queue
+# iPoke Live Queue
 
-An automated running-order queue for selling trading cards on TikTok Shop lives.
-Orders are pulled in automatically (no typing), grouped and prioritized by your
-rules, and shown as a self-updating live feed on a **web dashboard** and mirrored
-into **Discord**. Built to handle a busy 6-hour live (hundreds of orders).
+> **Which queue is this?** The **iPoke** queue — the advanced fork of the fleet. It is
+> its own deployment with its own identity; do not confuse it with PBCC or Poke Pig.
+>
+> | | |
+> |---|---|
+> | **Brand (public page)** | iPoke Live Queue |
+> | **Platform** | **Shopify** — TikTok Shop *and* web orders both funnel into one Shopify store, so Shopify is the single source and the app polls the **Shopify Admin API** (it does **not** call TikTok's API directly) |
+> | **Timezone** | Pacific (PST/PDT, `America/Los_Angeles`) |
+> | **Public page** | https://live-queue-ipoke.onrender.com/ (admin at `/ipokeadmin`) |
+> | **GitHub repo** | `zachk-cell/live-queue-ipoke` |
+> | **Render service** | `srv-daen10ou01pc73f6ltl0` |
+> | **Live model** | **Perpetual** — ingest runs 24/7 (`PERPETUAL=true`), not just during a live |
+> | **Queue-specific** | Events/Quacks & WTAs (with oversold capture + Shopify catalog sync & periodic auto-sync), Vault tracker, stream overlay (reel mode) |
+>
+> **The fleet (three separate queues — never cross-feed branding/platform/timezone/credentials):**
+>
+> | Queue | Brand | Repo | Platform | Timezone |
+> |---|---|---|---|---|
+> | **PBCC** | PBCC Live Queue | `tcg-live-queue` | TikTok | Eastern |
+> | **Poke Pig** | Poke Pig Live Queue | `live-queue-store2` | TikTok | Mountain |
+> | **iPoke** (this one) | iPoke Live Queue | `live-queue-ipoke` | Shopify (TikTok+web → Shopify) | Pacific |
+
+An automated running-order queue for a Shopify-based trading-card seller. Both
+TikTok Shop and native web orders land in one Shopify store; this app polls the
+**Shopify Admin API**, groups and prioritizes by your rules, and shows a
+self-updating live feed on a **web dashboard**, a **public page**, a **stream
+overlay**, and mirrored into **Discord**. Built to handle a busy multi-hour live
+(hundreds of orders), running 24/7.
 
 ## What it does
 
-- **Auto-ingest** — while a live is running the app polls the TikTok Shop Order
-  API every ~10s, fetches each new paid order's detail, and drops it into the
-  queue. Nothing is typed by hand. Ingest only runs while you're Live.
-- **Item-driven priority** — if an order contains one of your configured
-  *priority items* (e.g. "break", "slab", "PSA 10"), that buyer jumps to the top.
-  Multiple priority buyers all sit at the top, ordered by who bought first.
-  Matching is a contiguous, in-order substring (an item counts only if its name
-  contains the exact phrase). A set of **always-on** priority phrases can also be
-  baked in per store via `PRIORITY_ITEMS_EXTRA`.
-- **Buyer slot-merging** — if a buyer orders again *before* their slot is
-  fulfilled, the new order is merged into their existing slot (items + total
-  combined). They are **not** added to the queue a second time. After a slot is
-  fulfilled, a later order from that buyer opens a fresh slot.
-- **Queue & fulfillment metrics** — each slot shows time-in-queue; the stats bar
-  shows the average wait and the average fulfillment time (how long an order sat
-  at #1 before being fulfilled). The live "at top" timer runs only for the current
-  #1 and clears if a bump/priority pushes a slot down.
-- **Display name vs @username** — the queue, labels, and public page show the
-  buyer's public display name; the admin expanded view also shows their actual
-  @username for cross-referencing against TikTok. The username never appears
-  publicly.
-- **Vault per-variant counters** *(store-specific, via `TRACKED_VARIANTS`)*
-  — an admin card + a public tracker tally each tracked bundle variant, +1 per
-  unit when an order reaches the top. Counts are cumulative and persist across
-  streams; each is manually editable (Save) and resettable (with a second
-  confirmation), and every edit/reset is written to a recoverable log. Also
-  mirrored as a separate always-visible pinned message in Discord.
-- **One-tap fulfill** — mark a slot done from the dashboard or Discord; it drops
-  off the active queue into "recently fulfilled".
-- **Manual bump** — force any buyer to the very top when you need to.
-- **Durable** — queue, history, priority config, Vault counts, and TikTok
-  tokens are written to `data/`. On Render, mount a **persistent disk** at
-  `/opt/render/project/src/data` so all of it survives deploys and restarts.
+- **Auto-ingest (perpetual)** — the app polls the **Shopify Admin API** every
+  ~10s for new paid, non-cancelled orders and drops each into the queue. Because
+  iPoke is perpetual, ingest runs 24/7 (not gated on a Live toggle). On boot it
+  looks back a few hours so a redeploy never drops orders; ingest is idempotent.
+- **Item-driven priority** — orders containing a configured *priority item* jump
+  to the top (contiguous, in-order substring match); always-on phrases via
+  `PRIORITY_ITEMS_EXTRA`.
+- **Events — Quacks & WTAs** *(iPoke-specific)* — line items matching an event's
+  keyword are pulled out of the main queue into that event's side-queue, with a
+  spot cap. Oversells are **captured and flagged** (never dropped), including
+  orders that straddle the cap. Events can be **synced from the Shopify catalog**
+  (each event is a variant of the "Quack Pack Series" product) via a review list,
+  with a **periodic auto-sync** that pulls in newly-listed events; seat counts
+  default from Shopify **on_hand** inventory.
+- **Vault per-variant counters** *(via `TRACKED_VARIANTS`)* — admin card + public
+  tracker tally each tracked bundle variant, cumulative across streams, editable/
+  resettable with a recoverable log, mirrored in Discord. A fulfill-grace sweep
+  counts vault units even when an order is fulfilled off the top of the queue.
+- **Stream overlay** — an OBS-ready overlay (`/overlay`) with a **reel mode**
+  that scrolls the whole queue (and an active event's roster) seamlessly.
+- **Apostrophe-safe keyword matching** — event keywords match regardless of
+  straight vs curly apostrophes (Shopify titles use curly ones).
+- **On-hold handling** — Shopify marks TikTok-channel orders `ON_HOLD` by
+  default; iPoke treats that as noise and only flags genuine **web-order** holds.
+- **Same-name safety** — only *different* buyers sharing a display name are
+  flagged (keyed on buyer id), never one buyer's multiple orders.
+- **Queue & fulfillment metrics**, **one-tap fulfill**, **manual bump**,
+  **on-hold / set-aside**, **page-size + order-number search**, **prepped**
+  tracking, and a **Past Events** archive.
+- **Durable** — state written to `data/`; on Render, mount a **persistent disk**
+  at `/opt/render/project/src/data`.
 
-## Try it right now (simulator — no accounts needed)
+## Try it locally (simulator — no accounts needed)
 
 ```bash
 npm install
 npm run demo
 ```
 
-Open **http://localhost:3000**. Fake orders start flowing every ~2.5s. The
-simulator intentionally creates repeat buyers (watch slots merge) and priority
-items (watch them jump to the top). Default priority triggers are `break` and
-`slab` — click **⭐ Priority items** to change them.
+Open **http://localhost:3000**. Fake orders flow every ~2.5s with repeat buyers
+(slots merge) and priority items (jump to top).
 
 ## How the queue orders slots
 
-Top of the queue = next to handle:
-
 1. A manually **bumped** slot.
-2. **Priority** slots (contain a priority item) before normal slots.
-3. Within priority: earliest priority-item purchase first.
-   Within normal: earliest order first.
+2. Priority-item buyers (earliest priority purchase first).
+3. Normal buyers (earliest order first).
 
-## Going live with real TikTok Shop orders
+Event line items are routed out of the main queue into their event side-queue.
 
-1. **Register a developer app** in the [TikTok Shop Partner Center](https://partner.tiktokshop.com/).
-   Create your app and enable **both** the **Order Information** (`seller.order.info`)
-   and **Shop Authorization** (`seller.authorization.info`) scopes — with only the
-   first, connecting fails with `105005 access scope`. Set the app's **Redirect URL**
-   to `https://YOUR-DOMAIN/auth/tiktok/callback`. (The region you pick in Partner
-   Center is permanent, so choose your shop's region.)
-2. **Host this app** somewhere with a public HTTPS URL (Render recommended — see
-   the Setup SOP). It polls TikTok's Order API on a timer, so it just needs to be
-   online during lives; no inbound webhook is required.
-3. Copy `.env.example` to `.env` and fill in:
-   - `TIKTOK_ENABLED=true`, `SIMULATE=false`
-   - `TIKTOK_APP_KEY`, `TIKTOK_APP_SECRET` (from your app)
-   - `TIKTOK_AUTH_URL` (the Partner Center authorize link — powers the Reconnect button)
-4. Have the shop owner open the authorize link and **Confirm to install**. The app
-   captures the shop cipher + tokens. Then seed `TIKTOK_REFRESH_TOKEN` and
-   `TIKTOK_SHOP_CIPHER` into the env — this is the **durability seed** that lets the
-   app auto-reconnect on a fresh instance without re-authorizing.
-5. Restart. Real orders now flow into the queue automatically while you're Live.
+## Connecting Shopify (how ingest actually works)
 
-> The TikTok field names can vary slightly by API version. If a live order shows
-> the wrong buyer/total — or a variant isn't being captured — adjust the mapping in
-> `tiktok.js` → `normalizeOrder()`. The item variant lives in TikTok's `sku_name`
-> field, which `normalizeOrder()` folds into the item name so priority/variant
-> matching can see it.
+iPoke authenticates to Shopify with a **Dev Dashboard app** using the
+**client-credentials** grant (Client ID + Secret exchanged for a short-lived
+Admin API token, auto-refreshed). It does **not** use TikTok's API.
 
-## Adding the Discord mirror (optional)
+1. Create/most-likely reuse the Shopify **Dev Dashboard** app for the store.
+2. Grant Admin API scopes: `read_orders`, `read_customers` (required for the
+   queue), plus `read_products`, `read_inventory`, `read_locations` (required for
+   the event catalog sync + on_hand seat defaults). After changing scopes, the
+   app's **installation on the store must be updated/re-authorized** for the new
+   token to include them.
+3. Set env: `SHOPIFY_ENABLED=true`, `SHOPIFY_SHOP`, `SHOPIFY_CLIENT_ID`,
+   `SHOPIFY_CLIENT_SECRET`, `PERPETUAL=true`. (A legacy static
+   `SHOPIFY_ADMIN_TOKEN` is still honored if present.)
+4. Restart. Orders flow in 24/7.
 
-1. Create a bot at the [Discord Developer Portal](https://discord.com/developers/applications),
-   copy its **token**, and invite it to your server with permission to read/send
-   messages in one channel.
-2. In `.env` set `DISCORD_ENABLED=true`, `DISCORD_BOT_TOKEN=...`,
-   `DISCORD_CHANNEL_ID=...` (right-click the channel → Copy ID; enable Developer
-   Mode in Discord settings first).
-3. Restart. The bot posts and pins a live-updating queue message and adds
-   `/queue`, `/fulfill`, and `/bump` commands for your mods. On stores that set
-   `TRACKED_VARIANTS`, it also keeps a **separate, always-visible pinned message**
-   — a Vault Tracker of the variant counts — kept apart from the queue
-   message so it's easy to pause or remove.
+> Shopify field mapping lives in `shopify.js` → `normalizeShopifyOrder()`. The
+> variant is folded into the item name so priority / event / vault matching sees
+> it. Admin probes: `/api/shopify-status`, `/api/shopify-scope-check`.
 
-## Store-specific features (optional env)
+## Discord mirror (optional)
 
-The same codebase powers multiple stores; two optional env vars switch on
-per-store behavior. Leave them empty (`[]`) and the features stay dormant.
+Set `DISCORD_ENABLED=true`, `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID` and restart;
+the bot posts/pins a live queue message, the Vault tracker, and per-event roster
+posts (the event currently on the overlay is marked 🔴 LIVE).
 
-- `TRACKED_VARIANTS` — JSON array of Vault counters:
-  `[{"id","label","product","variant"}]`. `product` and `variant` are lowercased
-  substrings that **both** must appear in an item's name for a unit to count.
-  The counts themselves are stored in `data/config.json` (persistent disk), not
-  in the env — the env only defines *which* variants to track.
-- `PRIORITY_ITEMS_EXTRA` — JSON array of always-on priority trigger phrases,
-  merged on top of the admin-panel priority words and surviving redeploys.
+## Deploying
 
-## Deploying updates
+Auto-deploy is **off**. Push to `zachk-cell/live-queue-ipoke`, then on Render
+service `srv-daen10ou01pc73f6ltl0` use **Manual Deploy → Deploy latest commit**
+and confirm the served page updated. State persists across the restart.
+Always syntax-check `index.html`'s inline JS before deploying (a JS error there
+takes the whole admin page down).
 
-Auto-deploy may not be wired (if the repo isn't connected through the host's
-GitHub App, a plain `git push` won't deploy). On Render, after committing, use
-**Manual Deploy → Deploy latest commit**, then confirm the served page actually
-changed. Saving env vars also triggers a deploy.
-
-## Project layout
+## File map
 
 ```
-server.js          wiring: web + API + poller + discord + simulator
-queue.js           the queue engine (grouping, priority, metrics, variants, persistence)
-tiktok.js          TikTok Shop OAuth + Order API poller + normalizeOrder()
-discord.js         Discord live-mirror bot (+ Vault tracker message)
-simulator.js       fake order feed for the demo
-index.html         the admin dashboard
-public.html        the public buyer-facing view (+ Vault tracker)
-guide.html         in-app operator guide
-sandbox.html       self-contained practice sandbox (fake data, no backend)
-data/              persisted state: queue-state.json, config.json, history.json, tiktok-tokens.json
+server.js            Express app, routes, socket.io, static pages, event/vault/clip APIs
+queue.js             QueueEngine: ingest, ordering, merge, events, vault, oversold, metrics
+shopify.js           Shopify Admin API auth (client-credentials) + poller + event catalog sync
+tiktok.js            legacy TikTok helpers (not the primary ingest path for iPoke)
+discord.js           Discord mirror (queue + Vault + event rosters)
+index.html           admin dashboard
+public.html          public live page ("iPoke Live Queue")
+overlay.html         OBS stream overlay (reel mode)
+vault-overlay.html   OBS vault overlay
+events-history.html  Past Events archive page
+data/                persisted state (queue, config, history, events, past-events)
 ```
-
-## Notes on scale
-
-At ~400 orders / 6 hours you're near one order per minute — far under TikTok's
-API limits (~50 req/s, ~1,000/day per endpoint) and trivial for the dashboard.
-The Discord mirror batches its edits every few seconds to stay clear of Discord's
-rate limits during busy stretches.
