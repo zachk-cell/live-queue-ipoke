@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Live Queue — Interactive Sandbox</title>
+<title>iPoke Live Queue — Interactive Sandbox</title>
 <style>
   :root{
     --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --line:#272c38;
@@ -121,7 +121,7 @@
 </head>
 <body>
 <header>
-  <h1><span id="dot" class="dot"></span>Poke Pig Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span class="demopill">🧪 SANDBOX</span></h1>
+  <h1><span id="dot" class="dot"></span>iPoke Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span class="demopill">🧪 SANDBOX</span></h1>
   <a href="/guide" class="hdr-link hdr-logout">← Back to guide</a>
   <div class="stats">
     <div class="stat"><b id="s-active">0</b><span>In queue</span></div>
@@ -134,7 +134,7 @@
 <main>
   <div class="demobar">
     <h2>🧪 Interactive sandbox — nothing here is real</h2>
-    <p>This is a safe copy of the admin panel with make-believe orders. Add orders with the buttons below, then click around: expand rows, print labels, fulfill, bump, undo — you can't break anything. Refresh the page to start over.</p>
+    <p>This is a safe copy of the <b>iPoke Live Queue</b> admin board with make-believe orders. In the real app, TikTok Shop <em>and</em> web orders both land in one <b>Shopify</b> store and flow in 24/7 (iPoke is perpetual — there's no ingest gate). Add orders with the buttons below, then click around: expand rows, print labels, fulfill, bump, undo — you can't break anything. Refresh the page to start over. <span style="color:var(--muted)">(Events — Quacks &amp; WTAs — and the <b>Vault</b> counter live on the real board; this practice copy focuses on the main queue.)</span></p>
     <div class="btns">
       <button class="key" onclick="loadSample()">▶ Load a sample board</button>
       <button onclick="addNormal()">＋ Add order</button>
@@ -158,7 +158,7 @@
   <div class="chips" id="pri-chips"></div>
 
   <div id="offline-banner" class="offline-banner" style="display:none">
-    ⚫ You're <b>offline</b> — in the real panel, new orders are ignored until you hit <b>Go Live</b>. (In the sandbox you can add orders anytime.)
+    ⚫ This is a <b>practice toggle only</b>. The real iPoke app is <b>perpetual</b> — Shopify orders flow into the board 24/7, so there is no "go live" gate on ingest. (In the sandbox you can add orders anytime, all times shown are Pacific.)
   </div>
 
   <div class="sectitle">Active queue — top is next</div>
@@ -425,16 +425,16 @@
   }
 
   // ---------------- Demo data generators ----------------
-  const BUYERS=['pokedad','holo_hunter','pikapapi','charizard_carl','piggybankpro','ripqueen','binderbabe','tjcardsfan','chaserchloe','elite_trainer'];
-  const NORMAL=['Pokémon 151 Booster Pack','Prismatic Evolutions Booster Pack','Surging Sparks Booster Pack','Piggy Bank Booster Pack Bundle - 151','Piggy Bank Booster Pack Bundle - White Flare','Piggy Bank Booster Pack Bundle - Black Bolt'];
-  const PRItems=['Legendary Collection Booster Pack','(Guaranteed Holo) 1st Edition Base Set Booster Pack','TJ Cardshop x PokePig God Tier Mystery Bag','TJ Cardshop x PokePig Alien Tier Mystery Bag'];
+  const BUYERS=['pokedad','holo_hunter','pikapapi','charizard_carl','ipokepro','ripqueen','binderbabe','tjcardsfan','chaserchloe','elite_trainer'];
+  const NORMAL=['Pokémon 151 Booster Pack','Prismatic Evolutions Booster Pack','Surging Sparks Booster Pack','iPoke Vault Bundle - 151','iPoke Vault Bundle - White Flare','iPoke Vault Bundle - Black Bolt'];
+  const PRItems=['Legendary Collection Booster Pack','(Guaranteed Holo) 1st Edition Base Set Booster Pack','iPoke God Tier Mystery Bag','iPoke Alien Tier Mystery Bag'];
   let bi=0;
   function nextBuyer(){ const b=BUYERS[bi%BUYERS.length]; bi++; return {buyer:b, buyerId:'B-'+b+'-'+bi}; }
   function pick(a){ return a[Math.floor((tick*7+idc*3)%a.length)]; }
   function addNormal(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:pick(NORMAL),qty:1}], 5+(tick%25)); }
   function addPriority(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:pick(PRItems),qty:1}], 60+(tick%60)); }
-  function addQtyOrder(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:'Piggy Bank Booster Pack Bundle - White Flare',qty:5}], 25); }
-  function addRepeatTop(){ const top=(state.queue||[])[0]; if(!top){ alert('Add an order first, then this adds another for whoever is #1.'); return; } pushOrder(top.buyer, top.buyerId, [{name:'Piggy Bank Booster Pack Bundle - Prismatic',qty:1}], 15); }
+  function addQtyOrder(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:'iPoke Vault Bundle - White Flare',qty:5}], 25); }
+  function addRepeatTop(){ const top=(state.queue||[])[0]; if(!top){ alert('Add an order first, then this adds another for whoever is #1.'); return; } pushOrder(top.buyer, top.buyerId, [{name:'iPoke Vault Bundle - Prismatic',qty:1}], 15); }
   function addSameName(){ const existing=(state.queue||[]).find(e=>!e._twin); const nm= existing?existing.buyer:'cardfiend'; if(!live) live=true; pushOrder(nm,'B-twin-'+(idc), [{name:pick(NORMAL),qty:1}], 12); }
   function addHold(){ const b=nextBuyer(); if(!live) live=true; pushOrder(b.buyer,b.buyerId,[{name:pick(NORMAL),qty:1}], 20, true); }
   function clearAll(){ orders.length=0; fulfilledRecs.length=0; cancelledRecs.length=0; bumpedBuyerId=null; commit(); }
@@ -444,24 +444,24 @@
     priorityItems=['legendary collection','1st edition base set','god tier mystery bag','alien tier mystery bag'];
     // earlier-today: fulfill a pokedad order first, so his later order flags "earlier today"
     pushOrder('pokedad','B-pokedad',[{name:'Pokémon 151 Booster Pack',qty:1}],18); fulfill('B-pokedad');
-    // Priority (Alien Tier Mystery Bag) jumps to #1, then adds more Piggy Bank bundles while #1
-    pushOrder('holo_hunter','B-holo',[{name:'TJ Cardshop x PokePig Alien Tier Mystery Bag',qty:1}],120);
-    pushOrder('holo_hunter','B-holo',[{name:'Piggy Bank Booster Pack Bundle - Ascended Heroes',qty:2}],90);
-    pushOrder('holo_hunter','B-holo',[{name:'Piggy Bank Booster Pack Bundle - Prismatic',qty:1}],45);
+    // Priority (Alien Tier Mystery Bag) jumps to #1, then adds more Vault bundles while #1
+    pushOrder('holo_hunter','B-holo',[{name:'iPoke Alien Tier Mystery Bag',qty:1}],120);
+    pushOrder('holo_hunter','B-holo',[{name:'iPoke Vault Bundle - Ascended Heroes',qty:2}],90);
+    pushOrder('holo_hunter','B-holo',[{name:'iPoke Vault Bundle - Prismatic',qty:1}],45);
     // second priority (God Tier) sits just below
-    pushOrder('elite_trainer','B-elite',[{name:'TJ Cardshop x PokePig God Tier Mystery Bag',qty:1}],85);
+    pushOrder('elite_trainer','B-elite',[{name:'iPoke God Tier Mystery Bag',qty:1}],85);
     // merge with quantities (two different bundles in one bag)
     pushOrder('charizard_carl','B-carl',[{name:'Pokémon 151 Booster Pack',qty:1}],24);
     pushOrder('charizard_carl','B-carl',[{name:'Prismatic Evolutions Booster Pack',qty:1}],12);
     // a big-quantity bundle order
-    pushOrder('binderbabe','B-binder',[{name:'Piggy Bank Booster Pack Bundle - White Flare',qty:5}],95);
+    pushOrder('binderbabe','B-binder',[{name:'iPoke Vault Bundle - White Flare',qty:5}],95);
     pushOrder('pokedad','B-pokedad',[{name:'Surging Sparks Booster Pack',qty:1}],15); // returns -> earlier today
     // same display name, two different accounts
-    pushOrder('tjcardsfan','B-tj1',[{name:'Piggy Bank Booster Pack Bundle - Black Bolt',qty:1}],20);
+    pushOrder('tjcardsfan','B-tj1',[{name:'iPoke Vault Bundle - Black Bolt',qty:1}],20);
     pushOrder('tjcardsfan','B-tj2',[{name:'Prismatic Evolutions Booster Pack',qty:1}],12);
     // hold / cancel request
     pushOrder('ripqueen','B-rip',[{name:'Pokémon 151 Booster Pack',qty:1}],22,true);
-    pushOrder('chaserchloe','B-chloe',[{name:'Piggy Bank Booster Pack Bundle - 151',qty:1}],24);
+    pushOrder('chaserchloe','B-chloe',[{name:'iPoke Vault Bundle - 151',qty:1}],24);
     // a cancelled example
     pushOrder('oops_cancelled','B-oops',[{name:'Pokémon 151 Booster Pack',qty:1}],10);
     const os=orders.filter(o=>o.buyerId==='B-oops');
