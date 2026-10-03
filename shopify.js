@@ -492,13 +492,36 @@ export async function eventSyncCandidates(queue) {
   for (const e of existing) {
     for (const k of (e.keywords || [])) { const c = _canonKw(k); if (c) kwList.push(c); }
   }
+  // Canonical names of events that have already been FULFILLED (ripped/archived).
+  // A still-listed "sold out" product whose name matches one of these must NOT be
+  // re-created — it's a finished event. We surface these separately so the admin
+  // can see them (collapsed) without the auto-sync ever re-adding them.
+  const fulfilledSet = new Set(
+    (queue.fulfilledEventNames || []).map((r) => _canonKw((r && (r.title || r.canon)) || '')).filter(Boolean),
+  );
   const candidates = [];
+  const retired = []; // duplicate-name products still in the store, already fulfilled
   let alreadyLinked = 0;
   for (const v of variants) {
     if (!v.variantTitle) continue;
     const cv = _canonKw(v.variantTitle);
     const linked = bySrc.has(String(v.variantId)) || titleSet.has(cv) || kwList.some((k) => cv.includes(k));
     if (linked) { alreadyLinked++; continue; }
+    // Already fulfilled under this name → never auto-add; list it as retired.
+    if (fulfilledSet.has(cv)) {
+      const rec = (queue.fulfilledEventNames || []).find((r) => r && _canonKw((r.title || r.canon) || '') === cv);
+      retired.push({
+        variantId: v.variantId,
+        productId: v.productId,
+        productTitle: v.productTitle,
+        title: v.variantTitle,
+        type: _inferEventType(v.variantTitle),
+        keyword: v.variantTitle,
+        onHand: v.onHand,
+        fulfilledAt: (rec && rec.at) || null,
+      });
+      continue;
+    }
     candidates.push({
       variantId: v.variantId,
       productId: v.productId,
@@ -509,7 +532,7 @@ export async function eventSyncCandidates(queue) {
       onHand: v.onHand,
     });
   }
-  return { ok: true, scannedVariants: variants.length, alreadyLinked, candidates };
+  return { ok: true, scannedVariants: variants.length, alreadyLinked, candidates, retired };
 }
 
 // Periodic auto-sync: create events for any new active event-variant without

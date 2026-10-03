@@ -94,6 +94,13 @@ export class QueueEngine extends EventEmitter {
     // Durable dedup for orders that produced ONLY event entries (and so never
     // land in the main `orders` map). Prevents double-ingest across restarts.
     this.seenEventOrders = new Set();
+    // Durable "already fulfilled" event-name registry. Once an event is ripped
+    // (fulfilled) or archived, its canonical title is recorded here so the
+    // Shopify auto-sync never re-creates it from a product that is still listed
+    // (even "sold out") in the store. The ONLY way a name comes back is deleting
+    // the event BEFORE it's fulfilled — a bare removeEvent, which does not
+    // register it. Backfilled from pastEvents on boot so the guard is retroactive.
+    this.fulfilledEventNames = []; // [{ title, canon, at, eventId }]
 
     // Label for the per-variant tracker card (the "Piggy Bank" on Poke Pig).
     // Configurable per store via env so iPoke can call it its own thing
@@ -154,6 +161,7 @@ export class QueueEngine extends EventEmitter {
         if (cfg.nameOverrides && typeof cfg.nameOverrides === 'object') this.nameOverrides = cfg.nameOverrides;
         if (Array.isArray(cfg.preppedBatches)) this.preppedBatches = new Set(cfg.preppedBatches);
         if (Array.isArray(cfg.events)) this.events = cfg.events;
+        if (Array.isArray(cfg.fulfilledEventNames)) this.fulfilledEventNames = cfg.fulfilledEventNames;
         this.eventCounter = cfg.eventCounter || 0;
         this.activeEventId = cfg.activeEventId || null;
         if (cfg.overlays && typeof cfg.overlays === 'object') {
@@ -187,6 +195,11 @@ export class QueueEngine extends EventEmitter {
     } catch (e) {
       console.warn('[queue] could not load past events:', e.message);
     }
+    // Retroactively seed the fulfilled-name registry from events that already
+    // finished before this guard existed (archived → pastEvents, or still on the
+    // board as "ripped"), so a first deploy immediately protects names the store
+    // owner already worked through.
+    this._backfillFulfilledNames();
     try {
       if (fs.existsSync(HISTORY_FILE)) {
         this.history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) || [];
@@ -484,6 +497,7 @@ export class QueueEngine extends EventEmitter {
           nameOverrides: this.nameOverrides,
           preppedBatches: [...this.preppedBatches],
           events: this.events,
+          fulfilledEventNames: this.fulfilledEventNames,
           eventCounter: this.eventCounter,
           activeEventId: this.activeEventId,
           overlays: this.overlays,
@@ -1484,6 +1498,47 @@ export class QueueEngine extends EventEmitter {
     return entry;
   }
 
+  /** Record an event's name as "fulfilled / done" so the Shopify auto-sync will
+   *  not re-create it from a product that's still listed in the store. Keyed by
+   *  the canonical title, idempotent. */
+  _registerFulfilledEventName(ev) {
+    if (!ev) return;
+    const title = String(ev.title || '').trim();
+    if (!title) return;
+    const canon = this._canon(title);
+    if (!canon) return;
+    if (!Array.isArray(this.fulfilledEventNames)) this.fulfilledEventNames = [];
+    if (this.fulfilledEventNames.some((r) => r && r.canon === canon)) return;
+    this.fulfilledEventNames.push({ title, canon, at: Date.now(), eventId: ev.id || '' });
+  }
+
+  /** Seed the fulfilled-name registry from events that already finished before
+   *  this guard existed: archived events (pastEvents) and any event still on the
+   *  board marked 'ripped'. Runs on boot; idempotent (deduped by canon title). */
+  _backfillFulfilledNames() {
+    try {
+      if (!Array.isArray(this.fulfilledEventNames)) this.fulfilledEventNames = [];
+      for (const p of (this.pastEvents || [])) this._registerFulfilledEventName({ title: p.title, id: p.id });
+      for (const e of (this.events || [])) {
+        if (e && e.status === 'ripped') this._registerFulfilledEventName({ title: e.title, id: e.id });
+      }
+    } catch (e) {
+      console.warn('[queue] fulfilled-name backfill failed:', e.message);
+    }
+  }
+
+  /** True if an event with this (canonicalized) name has already been fulfilled. */
+  isEventNameFulfilled(name) {
+    const canon = this._canon(name);
+    if (!canon) return false;
+    return (this.fulfilledEventNames || []).some((r) => r && r.canon === canon);
+  }
+
+  /** Set of canonical names that have been fulfilled (for the Shopify sync). */
+  fulfilledNameCanonSet() {
+    return new Set((this.fulfilledEventNames || []).map((r) => r && r.canon).filter(Boolean));
+  }
+
   addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId } = {}) {
     // Idempotent on Shopify variant: if an event for this variant already exists
     // (from an earlier manual add or the periodic auto-sync), don't create a
@@ -1624,6 +1679,9 @@ export class QueueEngine extends EventEmitter {
     this.pastEvents.unshift(record);
     this.pastEvents = this.pastEvents.slice(0, PAST_EVENTS_MAX);
     this._persistPastEvents();
+    // Archiving a finished event = done → remember the name so the Shopify
+    // auto-sync won't re-create it from a product still listed in the store.
+    this._registerFulfilledEventName(ev);
     // Now clear it off the active board (removeEvent persists + emits).
     this.removeEvent(id);
     this.emit('change', { reason: 'event-archived', eventId: id });
@@ -1647,6 +1705,8 @@ export class QueueEngine extends EventEmitter {
       if (e.eventId === id && e.status === 'queued') { e.status = 'fulfilled'; e.fulfilledAt = now; }
     }
     ev.status = 'ripped';
+    // Fulfilled → remember the name so the Shopify auto-sync won't re-add it.
+    this._registerFulfilledEventName(ev);
     if (this.activeEventId === id) this.activeEventId = null;
     this._persist();
     this.emit('change', { reason: 'event-ripped', eventId: id });

@@ -291,6 +291,20 @@
   .sync-seats::placeholder{color:#5a627a}
   .sync-empty{color:var(--muted);font-size:14px;text-align:center;padding:26px 10px}
   .sync-onhand{font-size:10px;color:#57e0a6;font-weight:700}
+  /* Collapsed "already fulfilled — still in store" section. These are NOT re-synced. */
+  .sync-retired{margin:4px 0 2px}
+  .sync-retired details{background:#141017;border:1px solid #3a2740;border-radius:10px;padding:2px 2px}
+  .sync-retired summary{cursor:pointer;list-style:none;padding:9px 11px;font-size:12.5px;font-weight:700;color:#d8a6e8;display:flex;align-items:center;gap:7px}
+  .sync-retired summary::-webkit-details-marker{display:none}
+  .sync-retired summary .chev{transition:transform .15s;font-size:10px;color:#9a7aa8}
+  .sync-retired details[open] summary .chev{transform:rotate(90deg)}
+  .sync-retired .sr-note{color:#8c7d95;font-size:11px;font-weight:500;padding:0 11px 8px}
+  .sync-rrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:8px 11px;border-top:1px solid #2a1f30}
+  .sync-rrow .sync-nm{color:#c9bcd2}
+  .sync-rrow .sync-kw{color:#7c6f87}
+  .sync-readd{background:#241a2c;color:#d8a6e8;border:1px solid #4a3357;border-radius:7px;padding:5px 9px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .sync-readd:hover{background:#2e2138}
+  .sync-readd:disabled{opacity:.5;cursor:default}
   .ecard .eh .epast{color:var(--accent);font-size:12.5px;font-weight:700;text-decoration:none;white-space:nowrap}
   .ecard .eh .epast:hover{text-decoration:underline}
   .erow{border-top:1px solid #21262f;padding:10px 0}
@@ -522,6 +536,7 @@
     <h3>⟳ Sync from Shopify</h3>
     <p class="sync-sub" id="sync-sub">Looking for new quacks & WTAs in your store…</p>
     <div class="sync-list" id="sync-list"></div>
+    <div class="sync-retired" id="sync-retired"></div>
     <div class="row">
       <button class="ghost" onclick="closeSync()">Cancel</button>
       <button class="primary" id="sync-add-btn" onclick="addSyncSelected()" disabled>Add selected</button>
@@ -1369,10 +1384,12 @@
 
   // ── Sync from Shopify (auto-detect events from the store catalog) ──
   let syncCandidates = [];
+  let syncRetired = [];
   async function openSync(){
-    syncCandidates = [];
+    syncCandidates = []; syncRetired = [];
     document.getElementById('sync-sub').textContent = 'Looking for new quacks & WTAs in your store…';
     document.getElementById('sync-list').innerHTML = '<div class="sync-empty">Loading…</div>';
+    document.getElementById('sync-retired').innerHTML = '';
     document.getElementById('sync-add-btn').disabled = true;
     document.getElementById('syncModal').classList.add('open');
     try{
@@ -1380,7 +1397,9 @@
       const j = await r.json();
       if(!j || !j.ok) throw new Error((j&&j.error)||'Sync failed');
       syncCandidates = j.candidates || [];
+      syncRetired = j.retired || [];
       renderSyncList(j);
+      renderSyncRetired();
     }catch(e){
       document.getElementById('sync-sub').textContent = '';
       document.getElementById('sync-list').innerHTML = '<div class="sync-empty">Couldn’t reach Shopify: '+esc(String(e.message||e))+'<br><br>Check that read_products is granted, then try again.</div>';
@@ -1393,7 +1412,8 @@
     if(!cands.length){
       sub.textContent = '';
       const linked = (j && j.alreadyLinked) ? (' '+j.alreadyLinked+' already have events.') : '';
-      list.innerHTML = '<div class="sync-empty">No new events found in the store.'+linked+'</div>';
+      const ret = (syncRetired && syncRetired.length) ? ' '+syncRetired.length+' already-fulfilled '+(syncRetired.length===1?'event is':'events are')+' listed below and won’t be re-added.' : '';
+      list.innerHTML = '<div class="sync-empty">No new events found in the store.'+linked+ret+'</div>';
       document.getElementById('sync-add-btn').disabled = true;
       return;
     }
@@ -1413,6 +1433,51 @@
       <input class="sync-seats" type="number" min="0" placeholder="—" value="${c.onHand!=null?c.onHand:''}" oninput="syncCandidates[${i}].seats=this.value" title="Seats (blank = untracked)" />
     </div>`).join('');
     document.getElementById('sync-add-btn').disabled = false;
+  }
+  // Collapsed list of products still in the store whose event was already
+  // fulfilled. These are NEVER auto-re-added; shown only so you can see them,
+  // with an explicit "Add anyway" override per row.
+  function renderSyncRetired(){
+    const box = document.getElementById('sync-retired');
+    if(!box) return;
+    const items = syncRetired || [];
+    if(!items.length){ box.innerHTML = ''; return; }
+    const rows = items.map((c,i)=>{
+      const when = c.fulfilledAt ? (' · fulfilled '+new Date(c.fulfilledAt).toLocaleDateString()) : '';
+      const oh = (c.onHand!=null) ? (' · <span class="sync-onhand">on-hand '+c.onHand+'</span>') : '';
+      return `<div class="sync-rrow" id="sync-rrow-${i}">
+        <div style="min-width:0">
+          <div class="sync-nm">${esc(c.title)}</div>
+          <div class="sync-kw">🔑 ${esc(c.keyword)}${oh}${when}</div>
+        </div>
+        <button class="sync-readd" onclick="syncReadd(${i})" title="Re-create this event even though it was already fulfilled">Add anyway</button>
+      </div>`;
+    }).join('');
+    box.innerHTML = `<details>
+      <summary><span class="chev">▶</span> Already fulfilled — still in store (${items.length})</summary>
+      <div class="sr-note">These match events you already fulfilled, so they won’t be re-synced automatically. Add one back only if you’re intentionally re-running it.</div>
+      ${rows}
+    </details>`;
+  }
+  async function syncReadd(i){
+    const c = (syncRetired||[])[i];
+    if(!c) return;
+    const ok = await uiConfirm({title:'Re-add "'+(c.title||'event')+'"?',
+      body:'This event was already fulfilled. Re-adding it creates a fresh event and starts taking orders for it again. Only do this if you’re intentionally re-running it.',
+      confirmText:'Add anyway', danger:false});
+    if(!ok) return;
+    const btn = document.querySelector('#sync-rrow-'+i+' .sync-readd');
+    if(btn){ btn.disabled = true; btn.textContent = 'Added'; }
+    const seats = (c.onHand==null) ? 0 : Math.max(0, Math.floor(Number(c.onHand)||0));
+    await postJSON('/api/events', {
+      type: c.type||'quack',
+      title: c.title,
+      description: '',
+      totalSpots: seats,
+      keywords: [c.keyword],
+      sourceVariantId: c.variantId,
+      sourceProductId: c.productId,
+    });
   }
   function syncRowToggle(i){
     if(!syncCandidates[i]) return;
