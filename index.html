@@ -349,6 +349,11 @@
   .eqrow .eqx:hover{color:var(--danger);border-color:var(--danger)}
   .eqrow .eqdone{background:#12331f;border:1px solid #1c5133;color:#43e08a;cursor:pointer;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:7px;white-space:nowrap}
   .eqrow .eqdone:hover{filter:brightness(1.15)}
+  .eqrow .eqedit{background:transparent;border:1px solid transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px}
+  .eqrow .eqedit:hover{color:var(--text);border-color:#3a3f4b}
+  .eqrow .eqmanual{color:#8fb7ff;font-size:11px;font-weight:800;flex:none;title:manual}
+  .eqadd{margin-top:6px;background:#161a22;border:1px dashed #3a3f4b;color:#a7b0c2;cursor:pointer;font-size:12px;font-weight:700;padding:6px 10px;border-radius:8px;width:100%}
+  .eqadd:hover{color:var(--text);border-color:#4a92ff}
   .eqrow .eqdone.on{background:#173a24;color:#57e0a6;border-color:#2a7048}
   .eqrow.done{opacity:.55}
   .eqrow.done .eqnm{text-decoration:line-through;color:var(--muted)}
@@ -526,6 +531,24 @@
     <div class="row">
       <button class="ghost" onclick="closeEvent()">Cancel</button>
       <button class="primary" onclick="saveEvent()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- iPoke: Add / rename event seat modal -->
+<div class="modal" id="seatModal">
+  <div class="card">
+    <h3 id="seat-title">Add seat</h3>
+    <label>Name</label><input type="text" id="seat-name" placeholder="e.g. Logan Pi" />
+    <div id="seat-extra">
+      <div class="two">
+        <div><label>Spots</label><input type="number" id="seat-spots" min="1" value="1" /></div>
+        <div><label>Order # (optional)</label><input type="text" id="seat-order" placeholder="#50936" /></div>
+      </div>
+    </div>
+    <div class="row">
+      <button class="ghost" onclick="closeSeat()">Cancel</button>
+      <button class="primary" id="seat-save" onclick="saveSeat()">Add seat</button>
     </div>
   </div>
 </div>
@@ -1560,6 +1583,47 @@
     try{ await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/fulfill', { on: on }); }
     catch{ alert("Couldn't update that spot — check your connection and try again."); }
   }
+  // ── Add / rename event seat (#4, #5) ──
+  let seatMode='add', seatEventId=null, seatEntryId=null;
+  function closeSeat(){ document.getElementById('seatModal').classList.remove('open'); }
+  function openAddSeat(eventId){
+    seatMode='add'; seatEventId=eventId; seatEntryId=null;
+    document.getElementById('seat-title').textContent='Add seat';
+    document.getElementById('seat-name').value='';
+    document.getElementById('seat-spots').value='1';
+    document.getElementById('seat-order').value='';
+    document.getElementById('seat-extra').style.display='';
+    document.getElementById('seat-save').textContent='Add seat';
+    document.getElementById('seatModal').classList.add('open');
+    setTimeout(()=>document.getElementById('seat-name').focus(),60);
+  }
+  function openRenameSeat(entryId){
+    let current='';
+    for(const ev of (state.events||[])) for(const en of (ev.entries||[])) if(en.id===entryId) current=en.buyer;
+    seatMode='rename'; seatEntryId=entryId; seatEventId=null;
+    document.getElementById('seat-title').textContent='Rename seat';
+    document.getElementById('seat-name').value=current||'';
+    document.getElementById('seat-extra').style.display='none';
+    document.getElementById('seat-save').textContent='Save name';
+    document.getElementById('seatModal').classList.add('open');
+    setTimeout(()=>{ const el=document.getElementById('seat-name'); el.focus(); el.select(); },60);
+  }
+  async function saveSeat(){
+    const name=(document.getElementById('seat-name').value||'').trim();
+    if(!name) return;
+    const btn=document.getElementById('seat-save'); btn.disabled=true;
+    try{
+      if(seatMode==='rename'){
+        await postJSON('/api/event-entry/'+encodeURIComponent(seatEntryId)+'/name',{name});
+      } else {
+        const spots=Math.max(1,Math.floor(Number(document.getElementById('seat-spots').value)||1));
+        const orderName=(document.getElementById('seat-order').value||'').trim();
+        await postJSON('/api/events/'+encodeURIComponent(seatEventId)+'/add-entry',{buyer:name,spots,orderName});
+      }
+      closeSeat();
+    }catch{ alert("Couldn't save — check your connection and try again."); }
+    finally{ btn.disabled=false; }
+  }
   function toggleEventQueue(id){
     if(expandedEvents.has(id)) expandedEvents.delete(id); else expandedEvents.add(id);
     renderEventsAdmin(true);
@@ -1586,12 +1650,14 @@
       const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}">
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
+          ${en.manual?'<span class="eqmanual" title="Manually added seat">✚</span>':''}
           ${en.oversold?`<span class="eqover" title="${en.oversoldPartial?(en.oversoldSpotsInEntry+' of the '+en.spots+' spots in this order are beyond the seat limit'):'Beyond the event seat limit'}">OVERSOLD${(en.oversoldSpotsInEntry>1||en.oversoldPartial)?(' ×'+en.oversoldSpotsInEntry):''}</span>`:''}
           ${en.createdAt?`<span class="eqtime" title="Order received (PST)">🕒 ${esc(fmtPST(en.createdAt))}</span>`:''}
           <span class="eqord">${esc(en.orderName || (en.orderId?('#'+shortId(en.orderId)):''))}</span>
           ${en.spots>1?`<span class="eqsp">×${en.spots}</span>`:''}
           ${en.source?`<span class="srcbadge ${esc(srcShort(en.source))}">${esc(srcShort(en.source))}</span>`:''}
           <button class="eqdone${en.fulfilled?' on':''}" title="${en.fulfilled?'Undo — mark not fulfilled':'Mark this spot fulfilled'}" onclick="fulfillEventEntryUI('${en.id}',${en.fulfilled?'false':'true'})">${en.fulfilled?'✓ Done':'Fulfill'}</button>
+          <button class="eqedit" title="Rename this seat" onclick="openRenameSeat('${en.id}')">✎</button>
           <button class="eqx" title="Remove this spot" onclick="removeEventEntryUI('${en.id}')">✕</button>
         </div>`).join('') : '<div class="eqrow" style="color:#748099">No spots yet.</div>';
       return `<div class="erow ${expandedEvents.has(e.id)?'open':''}">
@@ -1617,7 +1683,7 @@
         ${e.description?`<div class="ekw">${esc(e.description)}</div>`:''}
         <div class="ekw">🔑 ${(e.keywords||[]).map(esc).join(', ')||'<i>no keywords</i>'}</div>
         <button class="eexpand" onclick="toggleEventQueue('${e.id}')">${expandedEvents.has(e.id)?'▾ Hide':'▸ Show'} side-queue (${(e.unfulfilledCount!=null && e.unfulfilledCount!==e.entryCount)?`${e.unfulfilledCount} left of ${e.entryCount}`:e.entryCount})</button>
-        <div class="equeue">${eq}</div>
+        <div class="equeue">${eq}<button class="eqadd" onclick="openAddSeat('${e.id}')">＋ Add seat</button></div>
       </div>`;
     };
     // Condensed one-line-per-event view shown when the section is collapsed.

@@ -1800,6 +1800,55 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Rename a single event seat (admin). Sets the name directly on the entry and
+   *  flags it so the per-event roster shows this name verbatim, independent of the
+   *  buyer-level name override used by the main queue. Empty name is ignored. */
+  setEventEntryBuyer(entryId, name) {
+    const e = this.eventEntries.get(String(entryId));
+    if (!e) return false;
+    const nm = String(name == null ? '' : name).trim();
+    if (!nm || (e.nameOverridden && e.buyer === nm)) return false;
+    e.buyer = nm;
+    e.nameOverridden = true;
+    this._persist();
+    this.emit('change', { reason: 'event-entry-rename', entryId: String(entryId) });
+    return true;
+  }
+
+  /** Manually add one seat (or a multi-spot block) to an event's side-queue.
+   *  Name + spots + optional order number. Added to the end of the roster (newest
+   *  createdAt), counts toward the event's capacity like any other spot, and is
+   *  flagged `manual` so it's distinguishable. Returns the new entry or null. */
+  addEventEntryManual({ eventId, buyer, spots, orderName } = {}) {
+    const ev = this.events.find((e) => e.id === eventId);
+    if (!ev) return null;
+    const n = Math.max(1, Math.floor(Number(spots) || 1));
+    const nm = String(buyer == null ? '' : buyer).trim() || 'Manual seat';
+    const uniq = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const entryId = `evt:${ev.id}:manual:${uniq}`;
+    const entry = {
+      id: entryId,
+      eventId: ev.id,
+      orderId: '',
+      orderName: String(orderName == null ? '' : orderName).trim(),
+      buyerId: `manual:${entryId}`,
+      buyer: nm,
+      nameOverridden: true,
+      itemName: ev.title,
+      spots: n,
+      total: 0,
+      source: 'Manual',
+      createdAt: Date.now(),
+      receivedAt: Date.now(),
+      status: 'queued',
+      manual: true,
+    };
+    this.eventEntries.set(entryId, entry);
+    this._persist();
+    this.emit('change', { reason: 'event-entry-manual-add', eventId: ev.id, entryId });
+    return entry;
+  }
+
   /** The ordered side-queue for one event (first-in-first-served, no skipping),
    *  plus spot totals. */
   eventQueue(id) {
@@ -1834,10 +1883,11 @@ export class QueueEngine extends EventEmitter {
       return {
         id: e.id,
         position: i + 1,
-        buyer: this._displayName(e.buyerId, e.buyer),
+        buyer: e.nameOverridden ? e.buyer : this._displayName(e.buyerId, e.buyer),
         buyerId: e.buyerId,
         spots: e.spots,
         itemName: e.itemName,
+        manual: !!e.manual,
         source: e.source || '',
         orderId: e.orderId,
         orderName: e.orderName || '',

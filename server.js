@@ -373,6 +373,16 @@ app.post('/api/event-entry/:id/fulfill', requireAuth, (req, res) => {
   const on = req.body && req.body.on === false ? false : true;
   res.json({ ok: queue.setEventEntryFulfilled(req.params.id, on) });
 });
+// Rename a single event seat → { name }.
+app.post('/api/event-entry/:id/name', requireAuth, (req, res) => {
+  res.json({ ok: queue.setEventEntryBuyer(req.params.id, (req.body && req.body.name) || '') });
+});
+// Manually add a seat to an event → { buyer, spots, orderName }.
+app.post('/api/events/:id/add-entry', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const entry = queue.addEventEntryManual({ eventId: req.params.id, buyer: b.buyer, spots: b.spots, orderName: b.orderName });
+  res.json({ ok: !!entry, entry: entry || null });
+});
 
 // Order combining: mode = 'always' | 'off' | 'time'; windowMinutes for 'time'.
 app.post('/api/combine', requireAuth, (req, res) => {
