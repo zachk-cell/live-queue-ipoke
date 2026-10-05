@@ -355,6 +355,11 @@ app.post('/api/events/:id/active', requireAuth, (req, res) => {
   res.json({ ok: true, activeEventId: queue.setActiveEvent(on ? req.params.id : null) });
 });
 app.post('/api/events/:id/rip', requireAuth, (req, res) => res.json({ ok: queue.ripEvent(req.params.id) }));
+// Reposition an event within the list → { dir: 'up' | 'down' }.
+app.post('/api/events/:id/move', requireAuth, (req, res) => {
+  const dir = (req.body && req.body.dir) === 'up' ? 'up' : 'down';
+  res.json({ ok: queue.moveEvent(req.params.id, dir) });
+});
 // Archive a finished event to Past Events (keeps the roster) then clear it off the board.
 app.post('/api/events/:id/archive', requireAuth, (req, res) => {
   const rec = queue.archiveEvent(req.params.id);

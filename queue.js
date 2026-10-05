@@ -1692,6 +1692,22 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Reposition an event within the events list (admin ordering). dir = 'up' or
+   *  'down'; swaps with the adjacent event. The list order drives the admin and
+   *  public events sections. No-op at the ends. */
+  moveEvent(id, dir) {
+    const idx = this.events.findIndex((e) => e.id === id);
+    if (idx < 0) return false;
+    const swap = dir === 'up' ? idx - 1 : idx + 1;
+    if (swap < 0 || swap >= this.events.length) return false;
+    const t = this.events[idx];
+    this.events[idx] = this.events[swap];
+    this.events[swap] = t;
+    this._persist();
+    this.emit('change', { reason: 'event-move', eventId: id, dir });
+    return true;
+  }
+
   /** Archive a finished event to the Past Events list (full roster preserved),
    *  then remove it from the active board. The counterpart to removeEvent that
    *  keeps a record instead of discarding it. Returns the archived record. */

@@ -333,6 +333,10 @@
   .ebtns .edel:hover{color:var(--danger);border-color:var(--danger)}
   .ebtns .earch{background:#12331f;color:#43e08a;border:1px solid #1c5133}
   .ebtns .earch:hover{filter:brightness(1.15)}
+  .ebtns .emove{background:transparent;color:var(--muted);border:1px solid var(--line);padding:6px 8px;font-weight:700}
+  .ebtns .emove:hover{color:var(--text);border-color:#4a92ff}
+  .ebtns .elabels{background:transparent;color:#cdd4e4;border:1px solid var(--line)}
+  .ebtns .elabels:hover{border-color:#4a92ff;color:var(--text)}
   .ekw{color:#748099;font-size:11.5px;margin-top:5px}
   .espots-wrap{margin-top:7px}
   .espots-meter{height:7px;border-radius:5px;background:#1d212b;overflow:hidden;margin-top:4px}
@@ -783,6 +787,45 @@
     }
     f.srcdoc = doc;
   }
+
+  // --- Bulk event labels (#3) ---
+  // One thermal label (2.25"x1.25") per person in an event's side-queue, all sent
+  // to the print dialog at once. Each label: event title, buyer (first + 2 of last),
+  // their order #, and their spot count.
+  function printEventLabels(eventId){
+    const ev=(state.events||[]).find(e=>e.id===eventId);
+    if(!ev) return;
+    const entries=(ev.entries||[]);
+    if(!entries.length){ alert('No seats in this event yet.'); return; }
+    const labels=entries.map(en=>{
+      const nm=esc(en.buyer||'');
+      const ord=esc(en.orderName||(en.orderId?('#'+shortId(en.orderId)):''));
+      const sp=Number(en.spots)||1;
+      const spTxt=(sp>1?sp+' spots':'1 spot');
+      return `<div class="lbl"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${ord?ord+' · ':''}${spTxt}</div></div>`;
+    }).join('');
+    const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page{size:2.25in 1.25in;margin:0}
+      html,body{margin:0;padding:0;background:#fff;color:#000}
+      .lbl{width:2.25in;height:1.25in;box-sizing:border-box;padding:0.06in 0.09in;
+        display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
+        font-family:Arial,Helvetica,sans-serif;page-break-after:always;overflow:hidden}
+      .lbl:last-child{page-break-after:auto}
+      .lbl .evt{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.2px;
+        max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px}
+      .lbl .nm{font-size:16pt;font-weight:800;line-height:1.03;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .lbl .meta{font-size:9.5pt;font-weight:700;margin-top:3px;font-family:'Courier New',monospace}
+    </style></head><body>${labels}
+      <script>window.focus();setTimeout(function(){window.print();},80);<\/script>
+    </body></html>`;
+    let f=document.getElementById('labelFrame');
+    if(!f){ f=document.createElement('iframe'); f.id='labelFrame';
+      f.style.cssText='position:fixed;left:-10000px;top:0;width:2.4in;height:1.4in;border:0;background:#fff';
+      document.body.appendChild(f); }
+    f.srcdoc=doc;
+  }
+  async function moveEventUI(id,dir){ await postJSON('/api/events/'+encodeURIComponent(id)+'/move',{dir}); }
+
   async function toggleLive(){
     const live = (state.stats||{}).live;
     if(!live){
@@ -1668,6 +1711,9 @@
           ${e.active?'<span class="eactive">● ON OVERLAY</span>':''}
           ${ripped?'<span class="estat">(ripped)</span>':''}
           <div class="ebtns">
+            <button class="emove" title="Move event up" onclick="moveEventUI('${e.id}','up')">▲</button>
+            <button class="emove" title="Move event down" onclick="moveEventUI('${e.id}','down')">▼</button>
+            <button class="elabels" title="Print a label for everyone in this event's queue" onclick="printEventLabels('${e.id}')">🖨 Labels</button>
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
             <button class="eedit" onclick="editEvent('${e.id}')">Edit</button>
