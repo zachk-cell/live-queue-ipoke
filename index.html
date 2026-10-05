@@ -69,8 +69,10 @@
   .slot.priority .pos{color:var(--pri)}
   .who{flex:1;min-width:0}
   .who .name{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;
-    min-width:0;overflow:hidden;white-space:nowrap}
-  .who .name .ordno{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:0}
+    min-width:0;flex-wrap:wrap}
+  /* Order number must never be clipped — keep it whole and let it wrap to the next
+     line on a narrow panel instead of collapsing to "#." */
+  .who .name .ordno{flex:none;white-space:nowrap;overflow:visible;text-overflow:clip}
   .badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.4px;
     white-space:nowrap;flex:none}
   .badge.pri{background:var(--pri);color:#2a1e00}
@@ -192,6 +194,11 @@
   .vrow{padding:8px 0;border-top:1px solid #21262f}
   .vrow:first-of-type{border-top:none}
   .vrow .vlab{font-weight:700;font-size:13px;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
+  .vrow .vdrag{cursor:grab;color:#5a627a;font-size:13px;flex:none;user-select:none}
+  .vrow .vdrag:active{cursor:grabbing}
+  .vrow .vdrag:hover{color:#9aa3b5}
+  .vrow.dragging{opacity:.45}
+  .vrow.drag-over{box-shadow:inset 0 2px 0 #4a92ff}
   .vrow .vlab .vdel{margin-left:auto;background:transparent;border:none;color:#6b7280;font-size:13px;cursor:pointer;padding:0 2px;line-height:1;flex:none}
   .vrow .vlab .vdel:hover{color:#ff8b8b}
   .vkw{color:#748099;font-size:10.5px;margin:-2px 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1203,8 +1210,8 @@
       box._sig = sig;
       box.innerHTML = `<div class="vcard"><h3>${esc(title)} Counter</h3>
         <p class="vsub">Adds +1 per unit when an order reaches the top of the queue. Shown on the public page and the ${esc(title)} overlay. Counts are cumulative and persist across streams — they only change from a sale, a Save, or a Reset.</p>
-        <div class="vlist">${vs.length ? vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}">
-          <div class="vlab">${esc(v.label)}<button class="vdel" title="Remove this ${esc(title)}" onclick="removeVault('${esc(v.id)}')">✕</button></div>
+        <div class="vlist">${vs.length ? vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}" ondragover="vDragOver(event)" ondragleave="vDragLeave(event)" ondrop="vDrop(event,'${esc(v.id)}')">
+          <div class="vlab"><span class="vdrag" draggable="true" title="Drag to reorder" ondragstart="vDragStart(event,'${esc(v.id)}')" ondragend="vDragEnd(event)">⠿</span>${esc(v.label)}<button class="vdel" title="Remove this ${esc(title)}" onclick="removeVault('${esc(v.id)}')">✕</button></div>
           ${v.variant?`<div class="vkw">matches items containing “${esc(v.variant)}”</div>`:''}
           <div class="vctl">
             <input type="number" min="0" class="vin" value="${Number(v.count)||0}" />
@@ -1229,6 +1236,35 @@
       });
     }
     renderVariantLog();
+  }
+  // ── Drag-to-reorder the Vault list ── posts the reordered full def set to
+  // /api/variants (setTrackedVariants keeps each id's live count and the order).
+  let dragVaultId=null;
+  function vDragStart(ev,id){
+    dragVaultId=id;
+    try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',id); }catch(e){}
+    const r=ev.target.closest('.vrow'); if(r){ r.classList.add('dragging'); try{ ev.dataTransfer.setDragImage(r,20,16); }catch(e){} }
+  }
+  function vDragOver(ev){
+    if(dragVaultId==null) return;
+    const r=ev.currentTarget; if(r.getAttribute('data-id')===dragVaultId) return;
+    ev.preventDefault(); try{ ev.dataTransfer.dropEffect='move'; }catch(e){}
+    r.classList.add('drag-over');
+  }
+  function vDragLeave(ev){ ev.currentTarget.classList.remove('drag-over'); }
+  function vDragEnd(ev){ dragVaultId=null; document.querySelectorAll('.vrow.drag-over,.vrow.dragging').forEach(n=>n.classList.remove('drag-over','dragging')); }
+  function vDrop(ev,targetId){
+    ev.preventDefault(); ev.currentTarget.classList.remove('drag-over');
+    const src=dragVaultId; dragVaultId=null;
+    document.querySelectorAll('.vrow.dragging').forEach(n=>n.classList.remove('dragging'));
+    if(!src || src===targetId) return;
+    const ids=(state.variants||[]).map(v=>v.id);
+    const from=ids.indexOf(src), to=ids.indexOf(targetId);
+    if(from<0||to<0) return;
+    ids.splice(to,0, ids.splice(from,1)[0]);
+    const byId={}; currentVaultDefs().forEach(d=>{ byId[d.id]=d; });
+    const defs=ids.map(id=>byId[id]).filter(Boolean);
+    postJSON('/api/variants',{variants:defs});
   }
   // Build the FULL current definition list (id/label/keyword/product) from state,
   // so add/remove can POST the whole set to /api/variants (which preserves the

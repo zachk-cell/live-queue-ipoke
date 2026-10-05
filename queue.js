@@ -141,6 +141,9 @@ export class QueueEngine extends EventEmitter {
     // (#6) Give any existing open (Omega) quack its auto giveaway seat on boot, so
     // the rule applies to events that already existed before this shipped.
     this._backfillGiveawaySeats();
+    // (#8) Pull Ship-Sealed items out of orders that were queued before the
+    // Ship-Sealed split existed, so they land in the Ship-Sealed queue retroactively.
+    try { this.sweepQueuedIntoSealed(); } catch (e) { console.warn('[queue] sealed sweep failed:', e.message); }
   }
 
   /** Resolve the display name for a buyer, honouring a manual override. */
@@ -1325,10 +1328,43 @@ export class QueueEngine extends EventEmitter {
   }
 
   // ── Ship-Sealed side-queue (iPoke, internal pull/pack/ship) ────────────────
-  /** True if a line item belongs in the Ship-Sealed queue (name contains
-   *  "ship sealed", case-insensitive). */
+  /** True if a line item belongs in the Ship-Sealed queue — name contains
+   *  "ship sealed" (tolerant of a space, hyphen or underscore: "Ship Sealed",
+   *  "Ship-Sealed", "ship_sealed"), case-insensitive. */
   _isSealedItem(it) {
-    return String((it && it.name) || '').toLowerCase().includes('ship sealed');
+    return /ship[\s\-_]*sealed/i.test(String((it && it.name) || ''));
+  }
+
+  /** Retroactively pull "Ship Sealed" items out of orders ALREADY in the Rip-Live
+   *  queue into the Ship-Sealed queue. Covers orders that were ingested before the
+   *  Ship-Sealed split existed (re-ingest dedups, so they'd otherwise be stranded)
+   *  and any that slipped through. Runs on boot and each poll. Returns how many
+   *  orders had sealed items split out. */
+  sweepQueuedIntoSealed() {
+    let moved = 0;
+    const queued = [...this.orders.values()].filter((o) => o.status === 'queued');
+    for (const o of queued) {
+      const items = o.items || [];
+      const sealedItems = items.filter((it) => this._isSealedItem(it));
+      if (!sealedItems.length) continue;
+      this._addSealedSlot(o.id, {
+        buyerId: o.buyerId, buyer: o.buyer, buyerHandle: o.buyerHandle,
+        total: o.total, createdAt: o.createdAt, source: o.source, orderName: o.orderName,
+        fullName: o.fullName, shipping: o.shipping,
+      }, sealedItems);
+      const remaining = items.filter((it) => !this._isSealedItem(it));
+      if (remaining.length) {
+        o.items = remaining;
+        o.hasPriority = this._isPriorityOrder(remaining);
+      } else {
+        // The whole order was sealed — drop its Rip-Live slot.
+        this.orders.delete(o.id);
+        if (this.openBatch.get(o.buyerId) === o.batchKey) this.openBatch.delete(o.buyerId);
+      }
+      moved++;
+    }
+    if (moved) { this._markTopReached(); this._persist(); this.emit('change', { reason: 'sealed-sweep', moved }); }
+    return moved;
   }
 
   /** Add (or refresh) an order's Ship-Sealed slot. One record per order id — no

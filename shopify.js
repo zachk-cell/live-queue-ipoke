@@ -179,6 +179,14 @@ function numericId(gid) {
   return m ? m[1] : s;
 }
 
+// Shopify's checkout "add a tip" (defaulted, often left at $0) adds a line item
+// titled exactly "Tip". It isn't something to pull/pack, so we drop it from the
+// queue, events, Ship-Sealed list, packing labels and counts. Exact match only,
+// so a real product that merely contains the letters "tip" is never affected.
+function isTipItem(name) {
+  return String(name == null ? '' : name).trim().toLowerCase() === 'tip';
+}
+
 export function normalizeShopifyOrder(o) {
   if (!o) return null;
   const lineItems = (o.lineItems && o.lineItems.nodes) || [];
@@ -200,7 +208,7 @@ export function normalizeShopifyOrder(o) {
       variant: variant || '',
       qty: Number(li.quantity) || 1,
     };
-  });
+  }).filter((it) => !isTipItem(it.name));
   const orderId = 'shop:' + numericId(o.id);
   const cust = o.customer || null;
   const buyerKey = cust && cust.id
@@ -370,6 +378,12 @@ export function startShopifyPolling(queue) {
       if (queue.sweepQueuedIntoEvents) {
         const moved = queue.sweepQueuedIntoEvents();
         if (moved) console.log(`[shopify] swept ${moved} queued order(s) into events`);
+      }
+      // 5) Safety net: split "Ship Sealed" items out of queued orders into the
+      //    Ship-Sealed queue (covers orders queued before the split existed).
+      if (queue.sweepQueuedIntoSealed) {
+        const movedS = queue.sweepQueuedIntoSealed();
+        if (movedS) console.log(`[shopify] swept ${movedS} queued order(s) into Ship-Sealed`);
       }
     } catch (e) {
       console.error('[shopify] poll error:', e.message);
@@ -629,7 +643,7 @@ export async function fetchOrderShipping(id) {
     if (variant.toLowerCase() === 'default title') variant = '';
     const name = (variant && !title.toLowerCase().includes(variant.toLowerCase())) ? `${title} - ${variant}` : (title || 'Item');
     return { name, qty: Number(li.quantity) || 1 };
-  });
+  }).filter((it) => !isTipItem(it.name));
   return {
     ok: true,
     orderName: o.name || '',
