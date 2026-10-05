@@ -74,6 +74,7 @@
   .badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.4px;
     white-space:nowrap;flex:none}
   .badge.pri{background:var(--pri);color:#2a1e00}
+  .badge.bigd{background:#1f3a24;color:#7ef0a8;border:1px solid #2f6b40}
   .badge.multi{background:#31384a;color:#cdd4e4}
   .badge.back{background:#12303a;color:#7fdce8}
   .badge.reorder{background:var(--done);color:#04180d;animation:pulse 1.3s ease-in-out infinite}
@@ -969,7 +970,7 @@
 
   function slotInner(e){
     const itemStr = e.items.map(i=>`${i.qty}× ${i.name}`).join(', ');
-    const priBadge = e.isPriority?'<span class="badge pri">PRIORITY</span>':'';
+    const priBadge = e.isPriority?('<span class="badge pri">PRIORITY</span>'+(e.bigDollar?'<span class="badge bigd" title="Order total is $1,000+ — jumps the queue">💰 $1K+</span>':'')):'';
     const countBadge = `<span class="badge multi">${e.orderCount} order${e.orderCount===1?'':'s'}</span>`;
     // Loud heads-up: this buyer ordered AGAIN while already at the top (bag likely
     // in progress). Only flash it while they're CURRENTLY #1 — the one being

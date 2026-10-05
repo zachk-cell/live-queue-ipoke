@@ -825,10 +825,20 @@ export class QueueEngine extends EventEmitter {
       (o) => o.buyerId === first.buyerId && o.status === 'fulfilled'
     ).length;
     const priorityOrders = orders.filter((o) => o.hasPriority);
-    const isPriority = priorityOrders.length > 0;
-    const priorityAt = isPriority
+    const keywordPriority = priorityOrders.length > 0;
+    // (#7) $1000 rule: the FULL pre-split order total drives this — o.total is the
+    // whole Shopify order value (never reduced by the event/sealed split), so the
+    // batch sum here is the combined pre-split total. A single order or a manually
+    // combined batch at/above $1000 jumps the queue. (Event seat positions are
+    // never affected — they sort purely by purchase time in eventQueue.)
+    const batchTotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const bigDollar = batchTotal >= PRIORITY_DOLLARS;
+    const isPriority = keywordPriority || bigDollar;
+    // Among priority slots, keep time order: keyword-priority keeps its earliest
+    // priority-item time; a $1000 slot uses its first order time.
+    const priorityAt = keywordPriority
       ? Math.min(...priorityOrders.map((o) => o.createdAt))
-      : Infinity;
+      : (bigDollar ? (first.createdAt || Date.now()) : Infinity);
 
     // Merge item lines (sum quantities of same-name items).
     const itemMap = new Map();
@@ -913,6 +923,10 @@ export class QueueEngine extends EventEmitter {
       itemCount: items.reduce((n, i) => n + i.qty, 0),
       total: orders.reduce((s, o) => s + o.total, 0),
       isPriority,
+      // (#7) true when this slot is priority specifically because the order/batch
+      // total is ≥ $1000 (vs a keyword priority item).
+      bigDollar,
+      keywordPriority,
       priorityItems: [...new Set(
         orders.flatMap((o) => o.items.filter((it) => this._isPriorityOrder([it])).map((it) => it.name))
       )],
