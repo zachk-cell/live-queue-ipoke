@@ -386,6 +386,7 @@
     <button id="combinePill" class="combine-pill" style="display:none" onclick="openCombine()">⇄ Combining: <span class="cm" id="cm-label">…</span></button>
     <button class="ghost" id="sectionOrderBtn" style="display:none" onclick="toggleSectionOrder()" title="Move the Events & side-queues section above or below the main queue">⇅ Events on top</button>
     <a href="/overlay" target="_blank" id="overlayLink" style="text-decoration:none;display:none"><button class="ghost">📺 Overlay ↗</button></a>
+    <a href="/overlay/vault" target="_blank" id="vaultOverlayLink" style="text-decoration:none;display:none" title="Open the Vault pack-count OBS overlay (separate browser source from the queue overlay)."><button class="ghost">📦 Vault Overlay ↗</button></a>
   </div>
 
   <div class="chips" id="pri-chips"></div>
@@ -1254,6 +1255,7 @@
     // Combining is fixed ("combine until top, then lock") — no toggle shown.
     document.getElementById('combinePill').style.display = 'none';
     document.getElementById('overlayLink').style.display = perp ? '' : 'none';
+    document.getElementById('vaultOverlayLink').style.display = perp ? '' : 'none';
     document.getElementById('events-admin').style.display = perp ? '' : 'none';
     document.getElementById('ovBtn').style.display = perp ? '' : 'none';
     document.getElementById('sectionOrderBtn').style.display = perp ? '' : 'none';
