@@ -1708,6 +1708,26 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Reorder the whole events list to match the given array of event ids (admin
+   *  drag-and-drop). Ids not present are ignored; any current event missing from
+   *  the list is appended in its existing relative order, so the list length is
+   *  always preserved. Returns false if the result wouldn't cover every event. */
+  reorderEvents(orderedIds) {
+    if (!Array.isArray(orderedIds)) return false;
+    const byId = new Map(this.events.map((e) => [e.id, e]));
+    const next = [];
+    for (const id of orderedIds) {
+      const e = byId.get(String(id));
+      if (e && !next.includes(e)) next.push(e);
+    }
+    for (const e of this.events) if (!next.includes(e)) next.push(e);
+    if (next.length !== this.events.length) return false;
+    this.events = next;
+    this._persist();
+    this.emit('change', { reason: 'events-reorder' });
+    return true;
+  }
+
   /** Archive a finished event to the Past Events list (full roster preserved),
    *  then remove it from the active board. The counterpart to removeEvent that
    *  keeps a record instead of discarding it. Returns the archived record. */

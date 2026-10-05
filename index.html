@@ -309,6 +309,11 @@
   .ecard .eh .epast:hover{text-decoration:underline}
   .erow{border-top:1px solid #21262f;padding:10px 0}
   .erow:first-of-type{border-top:none}
+  .erow.dragging{opacity:.45}
+  .erow.drag-over{box-shadow:inset 0 2px 0 #4a92ff;background:#0f1622}
+  .edrag{cursor:grab;color:#5a627a;font-size:14px;line-height:1;padding:0 2px;flex:none;user-select:none}
+  .edrag:active{cursor:grabbing}
+  .edrag:hover{color:#9aa3b5}
   .erow .etop{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
   .etype{font-size:10px;font-weight:800;letter-spacing:.4px;padding:2px 7px;border-radius:20px}
   .etype.quack{background:#123a2a;color:#57e0a6}
@@ -824,7 +829,39 @@
       document.body.appendChild(f); }
     f.srcdoc=doc;
   }
-  async function moveEventUI(id,dir){ await postJSON('/api/events/'+encodeURIComponent(id)+'/move',{dir}); }
+  // ── Drag-to-reorder events (#3) ──
+  let dragEventId=null;
+  function evDragStart(ev,id){
+    dragEventId=id;
+    try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',id); }catch(e){}
+    const row=ev.target.closest('.erow');
+    if(row){ row.classList.add('dragging'); try{ ev.dataTransfer.setDragImage(row,24,16); }catch(e){} }
+  }
+  function evDragOver(ev){
+    if(dragEventId==null) return;
+    const row=ev.currentTarget;
+    if(row.getAttribute('data-eid')===dragEventId){ return; }
+    ev.preventDefault();
+    try{ ev.dataTransfer.dropEffect='move'; }catch(e){}
+    row.classList.add('drag-over');
+  }
+  function evDragLeave(ev){ ev.currentTarget.classList.remove('drag-over'); }
+  function evDragEnd(ev){
+    dragEventId=null;
+    document.querySelectorAll('.erow.drag-over,.erow.dragging').forEach(n=>n.classList.remove('drag-over','dragging'));
+  }
+  function evDrop(ev,targetId){
+    ev.preventDefault();
+    ev.currentTarget.classList.remove('drag-over');
+    const src=dragEventId; dragEventId=null;
+    document.querySelectorAll('.erow.dragging').forEach(n=>n.classList.remove('dragging'));
+    if(!src || src===targetId) return;
+    const ids=(state.events||[]).map(e=>e.id);
+    const from=ids.indexOf(src), to=ids.indexOf(targetId);
+    if(from<0||to<0) return;
+    ids.splice(to,0, ids.splice(from,1)[0]); // drop the dragged event at the target's slot
+    postJSON('/api/events-reorder',{order:ids});
+  }
 
   async function toggleLive(){
     const live = (state.stats||{}).live;
@@ -1703,16 +1740,15 @@
           <button class="eqedit" title="Rename this seat" onclick="openRenameSeat('${en.id}')">✎</button>
           <button class="eqx" title="Remove this spot" onclick="removeEventEntryUI('${en.id}')">✕</button>
         </div>`).join('') : '<div class="eqrow" style="color:#748099">No spots yet.</div>';
-      return `<div class="erow ${expandedEvents.has(e.id)?'open':''}">
+      return `<div class="erow ${expandedEvents.has(e.id)?'open':''}" data-eid="${e.id}" ondragover="evDragOver(event)" ondragleave="evDragLeave(event)" ondrop="evDrop(event,'${e.id}')">
         <div class="etop">
+          <span class="edrag" draggable="true" title="Drag to reorder this event" ondragstart="evDragStart(event,'${e.id}')" ondragend="evDragEnd(event)">⠿</span>
           <span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>
           <span class="ename">${esc(e.title)}</span>
           ${e.oversold?`<span class="oversoldtag" title="More spots ordered than this event's limit">⚠ OVERSOLD +${e.oversoldSpots}</span>`:''}
           ${e.active?'<span class="eactive">● ON OVERLAY</span>':''}
           ${ripped?'<span class="estat">(ripped)</span>':''}
           <div class="ebtns">
-            <button class="emove" title="Move event up" onclick="moveEventUI('${e.id}','up')">▲</button>
-            <button class="emove" title="Move event down" onclick="moveEventUI('${e.id}','down')">▼</button>
             <button class="elabels" title="Print a label for everyone in this event's queue" onclick="printEventLabels('${e.id}')">🖨 Labels</button>
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>

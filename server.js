@@ -360,6 +360,12 @@ app.post('/api/events/:id/move', requireAuth, (req, res) => {
   const dir = (req.body && req.body.dir) === 'up' ? 'up' : 'down';
   res.json({ ok: queue.moveEvent(req.params.id, dir) });
 });
+// Reorder the whole events list (drag-and-drop) → { order: [eventId, ...] }.
+// Note: a distinct path (not /api/events/reorder) so it isn't captured by the
+// POST /api/events/:id update route above.
+app.post('/api/events-reorder', requireAuth, (req, res) => {
+  res.json({ ok: queue.reorderEvents((req.body && req.body.order) || []) });
+});
 // Archive a finished event to Past Events (keeps the roster) then clear it off the board.
 app.post('/api/events/:id/archive', requireAuth, (req, res) => {
   const rec = queue.archiveEvent(req.params.id);
