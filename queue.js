@@ -611,16 +611,58 @@ export class QueueEngine extends EventEmitter {
    *  the system. Lets the Shopify poller re-apply the current name format to
    *  orders ingested under an older format. A manual name override (nameOverrides)
    *  still wins at display time via _displayName, so this never clobbers a rename.
+   *
+   *  Also refreshes the buyer label stored directly on this order's EVENT seats
+   *  and SHIP-SEALED record. Those carry their own buyer copy captured at ingest
+   *  (an all-event order never enters this.orders at all), so without this they'd
+   *  keep showing the name format they were created under — which is exactly why
+   *  event labels lagged on "First L." after the format moved to "First La".
+   *  A manually renamed seat (nameOverridden) always wins and is left untouched.
    *  Idempotent. */
   setBuyerName(orderId, name) {
-    const o = this.orders.get(String(orderId));
-    if (!o) return false;
+    const oid = String(orderId);
     const nm = String(name == null ? '' : name).trim();
-    if (!nm || o.buyer === nm) return false;
-    o.buyer = nm;
+    if (!nm) return false;
+    let changed = false;
+    const o = this.orders.get(oid);
+    if (o && o.buyer !== nm) { o.buyer = nm; changed = true; }
+    // Event seats for this order (skip seats renamed by hand).
+    for (const e of this.eventEntries.values()) {
+      if (String(e.orderId) === oid && !e.nameOverridden && e.buyer !== nm) {
+        e.buyer = nm; changed = true;
+      }
+    }
+    // Ship-Sealed record for this order.
+    const s = this.sealedOrders.get(oid);
+    if (s && !s.nameOverridden && s.buyer !== nm) { s.buyer = nm; changed = true; }
+    if (!changed) return false;
     this._persist();
-    this.emit('change', { reason: 'buyer-backfill', orderId: String(orderId) });
+    this.emit('change', { reason: 'buyer-backfill', orderId: oid });
     return true;
+  }
+
+  /** Shop order ids whose buyer label may still need reformatting to the current
+   *  name format: everything queued in the main Rip-Live queue, PLUS every open
+   *  event seat and Ship-Sealed order. The last two matter because an order whose
+   *  items all route into an event (or all into Ship-Sealed) never lands in
+   *  this.orders, so the main-queue refresh alone can never reach it. Deduped;
+   *  manual/giveaway seats (no real Shopify order) are excluded. */
+  labelRefreshOrderIds() {
+    const ids = new Set();
+    for (const o of this.orders.values()) {
+      if (o.status === 'queued' && o.id) ids.add(String(o.id));
+    }
+    for (const e of this.eventEntries.values()) {
+      if (e.status === 'queued' && e.orderId && /^shop:/.test(String(e.orderId))) {
+        ids.add(String(e.orderId));
+      }
+    }
+    for (const s of this.sealedOrders.values()) {
+      if (s && s.id && s.status !== 'fulfilled' && s.status !== 'cancelled' && /^shop:/.test(String(s.id))) {
+        ids.add(String(s.id));
+      }
+    }
+    return [...ids];
   }
 
   /** Detailed per-order records of orders still queued (unfulfilled) this

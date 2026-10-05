@@ -372,6 +372,30 @@ export function startShopifyPolling(queue) {
           }
         }
       }
+      // 3b) Refresh buyer labels on EVENT and SHIP-SEALED orders too. An order
+      //    whose items all route into an event (or all into Ship-Sealed) never
+      //    enters the main queue, so step 3 above can never reformat its buyer
+      //    label — which is why event labels kept showing the older "First L."
+      //    format. Fetch those orders' customers in small chunks (the id:.. OR
+      //    query silently fails past ~90 ids) and re-apply the current format.
+      //    Fully isolated in its own try/catch: nothing here can affect ingest.
+      try {
+        if (queue.labelRefreshOrderIds && queue.setBuyerName) {
+          const sideIds = queue.labelRefreshOrderIds().filter((id) => String(id).startsWith('shop:'));
+          for (let i = 0; i < sideIds.length; i += 50) {
+            const chunk = sideIds.slice(i, i + 50);
+            const clause = chunk.map((id) => `id:${numericId(id)}`).join(' OR ');
+            const nodes = await fetchOrdersMatching(clause, chunk.length).catch(() => []);
+            for (const node of nodes) {
+              const id = 'shop:' + numericId(node.id);
+              if (queue.setOrderName && node.name) queue.setOrderName(id, node.name);
+              if (node.customer) queue.setBuyerName(id, firstLast(node.customer, node.name));
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[shopify] event/sealed buyer-label refresh failed:', e.message);
+      }
       // 4) Safety net: sweep any queued orders that match an open event into it.
       //    Event routing happens at ingest, but an event created/edited after an
       //    order landed would otherwise strand it in the main queue forever.
