@@ -21,8 +21,10 @@ const STATE_FILE = path.join(DATA_DIR, 'queue-state.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const EVENTS_FILE = path.join(DATA_DIR, 'events-state.json'); // iPoke: event entries (side-queues)
+const SEALED_FILE = path.join(DATA_DIR, 'sealed-state.json'); // iPoke: Ship-Sealed side-queue (internal pack/ship)
 const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
 const PAST_EVENTS_MAX = 200; // keep the most recent N archived events
+const PRIORITY_DOLLARS = 1000; // an order (or combined batch) at/above this $ skips the queue
 const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
 
 // Order-combining modes (how a buyer's repeat orders are grouped into one slot):
@@ -88,6 +90,12 @@ export class QueueEngine extends EventEmitter {
     // spots routed out of the main queue by keyword.
     this.events = []; // [{ id, type:'quack'|'wta', title, description, totalSpots, keywords:[], status:'open'|'ripped', createdAt }]
     this.eventEntries = new Map(); // entryId -> entry
+    // Ship-Sealed side-queue (iPoke): orders whose item names contain "Ship Sealed"
+    // split OUT of the main Rip-Live queue into this internal pull/pack/ship list.
+    // Keyed by the order id; one record per order (no combine — each ships on its
+    // own). Never shown on the public/overlay views. { id, buyerId, buyer,
+    // buyerHandle, items, total, createdAt, receivedAt, status, source, orderName }.
+    this.sealedOrders = new Map();
     this.pastEvents = []; // archived finished events (most recent first)
     this.eventCounter = 0;
     this.activeEventId = null; // which event side-queue is toggled to the overlay/Discord
@@ -186,6 +194,17 @@ export class QueueEngine extends EventEmitter {
       }
     } catch (e) {
       console.warn('[queue] could not load events:', e.message);
+    }
+    try {
+      if (fs.existsSync(SEALED_FILE)) {
+        const arr = JSON.parse(fs.readFileSync(SEALED_FILE, 'utf8'));
+        if (Array.isArray(arr)) for (const o of arr) {
+          this.sealedOrders.set(String(o.id), o);
+          this.seenEventOrders.add(String(o.id)); // dedup sealed-only orders across restarts
+        }
+      }
+    } catch (e) {
+      console.warn('[queue] could not load sealed orders:', e.message);
     }
     try {
       if (fs.existsSync(PAST_EVENTS_FILE)) {
@@ -509,6 +528,9 @@ export class QueueEngine extends EventEmitter {
       if (this.eventEntries.size || fs.existsSync(EVENTS_FILE)) {
         this._atomicWrite(EVENTS_FILE, JSON.stringify([...this.eventEntries.values()]));
       }
+      if (this.sealedOrders.size || fs.existsSync(SEALED_FILE)) {
+        this._atomicWrite(SEALED_FILE, JSON.stringify([...this.sealedOrders.values()]));
+      }
     } catch (e) {
       console.warn('[queue] persist failed:', e.message);
     }
@@ -658,6 +680,16 @@ export class QueueEngine extends EventEmitter {
         if (nn && existing.orderName !== nn) { existing.orderName = nn; changed = true; }
         if (changed) { this._persist(); this.emit('change', { reason: 'order-refresh', orderId: id }); }
       }
+      // Keep the Ship-Sealed side-queue record's display fields in sync too.
+      const sx = this.sealedOrders.get(id);
+      if (sx) {
+        let ch = false;
+        const nb = String(raw.buyer == null ? '' : raw.buyer).trim();
+        if (nb && sx.buyer !== nb) { sx.buyer = nb; ch = true; }
+        const nn = String(raw.orderName == null ? '' : raw.orderName).trim();
+        if (nn && sx.orderName !== nn) { sx.orderName = nn; ch = true; }
+        if (ch) { this._persist(); this.emit('change', { reason: 'sealed-refresh', orderId: id }); }
+      }
       return existing || null;
     }
 
@@ -667,25 +699,38 @@ export class QueueEngine extends EventEmitter {
     const buyerId = String(raw.buyerId);
     const allItems = raw.items || [];
 
-    // ── Event routing ── split line items into event spots vs regular items.
+    // ── Event routing ── pull event-spot line items into their event side-queue.
     // Each matching line item becomes its own event entry (qty = spot count).
-    const regularItems = [];
+    const nonEvent = [];
     const routed = [];
     for (const it of allItems) {
       const ev = this._matchEvent(it);
       if (ev) routed.push({ it, ev });
-      else regularItems.push(it);
+      else nonEvent.push(it);
     }
     if (routed.length) {
       routed.forEach((r, i) => this._addEventEntry(r.ev, r.it, raw, i));
       this.seenEventOrders.add(id);
     }
 
-    // If every line item was an event spot, there is no main-queue slot.
+    // ── Ship-Sealed routing ── line items whose name contains "Ship Sealed" go
+    // into the internal Ship-Sealed side-queue instead of the main Rip-Live queue.
+    // An order can split across all three (event + rip-live + ship-sealed).
+    const regularItems = [];
+    const sealedItems = [];
+    for (const it of nonEvent) {
+      if (this._isSealedItem(it)) sealedItems.push(it); else regularItems.push(it);
+    }
+    if (sealedItems.length) this._addSealedSlot(id, raw, sealedItems);
+
+    // Nothing left for the main Rip-Live queue → no main slot, but event and/or
+    // ship-sealed parts may still have been created. Mark the order seen so a
+    // re-fetch doesn't try to re-ingest it.
     if (!regularItems.length) {
-      if (routed.length) {
+      if (routed.length || sealedItems.length) {
+        this.seenEventOrders.add(id);
         this._persist();
-        this.emit('change', { reason: 'event-order', orderId: id });
+        this.emit('change', { reason: 'side-queue-order', orderId: id });
       }
       return null;
     }
@@ -822,6 +867,19 @@ export class QueueEngine extends EventEmitter {
         return only.includes('tiktok') || only === 'tt' ? 'TT' : 'SF';
       })(),
       orderName: first.orderName || '',
+      // (#9) Cross-queue markers: does any order in this slot ALSO have an event
+      // seat (E) and/or a Ship-Sealed part (S)? Shown as bubbles on the Rip-Live row.
+      hasEventPart: (() => {
+        const ids = new Set(orders.map((o) => String(o.id)));
+        for (const e of this.eventEntries.values()) {
+          if (e.status !== 'cancelled' && ids.has(String(e.orderId))) return true;
+        }
+        return false;
+      })(),
+      hasSealedPart: orders.some((o) => {
+        const s = this.sealedOrders.get(String(o.id));
+        return !!s && s.status !== 'cancelled';
+      }),
       // Admin-only cross-check: the buyer's unique @username (the queue label is
       // their display name). Never surfaced on the public view.
       buyerHandle: first.buyerHandle || '',
@@ -1185,6 +1243,9 @@ export class QueueEngine extends EventEmitter {
       events: this.eventsSummary(),
       activeEventId: this.activeEventId,
       activeEvent: this.activeEventId ? this.eventQueue(this.activeEventId) : null,
+      // Ship-Sealed internal queue (never surfaced on public/overlay views).
+      sealed: this.sealedQueue(),
+      sealedDone: this.sealedDoneCount(),
     };
   }
 
@@ -1218,8 +1279,12 @@ export class QueueEngine extends EventEmitter {
    *  order flips to CANCELLED on TikTok). Leaves any other orders in the same
    *  buyer's slot untouched. */
   cancelOrder(orderId) {
-    const o = this.orders.get(String(orderId));
-    if (!o || o.status !== 'queued') return null;
+    const id = String(orderId);
+    // A full-order cancel on Shopify cancels every part of the order — including
+    // its Ship-Sealed slot (which may be the only part).
+    const sealedCancelled = this.removeSealedOrder(id);
+    const o = this.orders.get(id);
+    if (!o || o.status !== 'queued') return sealedCancelled ? { id, sealedOnly: true } : null;
     o.status = 'cancelled';
     o.cancelledAt = Date.now();
     o.bumped = false;
@@ -1230,8 +1295,100 @@ export class QueueEngine extends EventEmitter {
     if (!stillOpen && this.openBatch.get(o.buyerId) === o.batchKey) this.openBatch.delete(o.buyerId);
     this._markTopReached();
     this._persist();
-    this.emit('change', { reason: 'cancelled', orderId: String(orderId) });
+    this.emit('change', { reason: 'cancelled', orderId: id });
     return o;
+  }
+
+  // ── Ship-Sealed side-queue (iPoke, internal pull/pack/ship) ────────────────
+  /** True if a line item belongs in the Ship-Sealed queue (name contains
+   *  "ship sealed", case-insensitive). */
+  _isSealedItem(it) {
+    return String((it && it.name) || '').toLowerCase().includes('ship sealed');
+  }
+
+  /** Add (or refresh) an order's Ship-Sealed slot. One record per order id — no
+   *  combining, since each order is pulled, packed and shipped on its own. The
+   *  record carries the FULL order total so the $1000 priority applies here too. */
+  _addSealedSlot(id, raw, items) {
+    const sid = String(id);
+    const existing = this.sealedOrders.get(sid);
+    if (existing) {
+      existing.items = items;
+      existing.total = Number(raw.total != null ? raw.total : existing.total) || 0;
+      if (raw.buyer) existing.buyer = raw.buyer;
+      if (raw.orderName) existing.orderName = raw.orderName;
+      return existing;
+    }
+    const rec = {
+      id: sid,
+      buyerId: String(raw.buyerId),
+      buyer: raw.buyer || 'Buyer',
+      buyerHandle: raw.buyerHandle || '',
+      items,
+      total: Number(raw.total || 0),
+      createdAt: raw.createdAt || Date.now(),
+      receivedAt: Date.now(),
+      status: 'queued',
+      source: raw.source || '',
+      orderName: raw.orderName || '',
+    };
+    this.sealedOrders.set(sid, rec);
+    this.seenEventOrders.add(sid);
+    return rec;
+  }
+
+  /** The internal Ship-Sealed queue: $1000+ orders first, then oldest-first.
+   *  Queued records only (packed/shipped ones drop off). */
+  sealedQueue() {
+    const list = [...this.sealedOrders.values()].filter((o) => o.status === 'queued');
+    list.sort((a, b) => {
+      const pa = (Number(a.total) || 0) >= PRIORITY_DOLLARS ? 1 : 0;
+      const pb = (Number(b.total) || 0) >= PRIORITY_DOLLARS ? 1 : 0;
+      if (pa !== pb) return pb - pa;
+      return (a.createdAt || 0) - (b.createdAt || 0);
+    });
+    return list.map((o, i) => ({
+      id: o.id,
+      position: i + 1,
+      buyerId: o.buyerId,
+      buyer: this._displayName(o.buyerId, o.buyer),
+      items: o.items || [],
+      itemCount: (o.items || []).reduce((n, it) => n + (Number(it.qty) || 1), 0),
+      total: Number(o.total) || 0,
+      source: o.source || '',
+      orderName: o.orderName || '',
+      createdAt: o.createdAt || null,
+      isPriority: (Number(o.total) || 0) >= PRIORITY_DOLLARS,
+    }));
+  }
+
+  /** How many Ship-Sealed orders have been packed/shipped (fulfilled) this run. */
+  sealedDoneCount() {
+    let n = 0;
+    for (const o of this.sealedOrders.values()) if (o.status === 'fulfilled') n++;
+    return n;
+  }
+
+  /** Mark a Ship-Sealed order packed/shipped (or undo). */
+  markSealedFulfilled(id, on = true) {
+    const o = this.sealedOrders.get(String(id));
+    if (!o) return false;
+    if (on) { if (o.status !== 'queued') return false; o.status = 'fulfilled'; o.fulfilledAt = Date.now(); }
+    else { if (o.status !== 'fulfilled') return false; o.status = 'queued'; delete o.fulfilledAt; }
+    this._persist();
+    this.emit('change', { reason: 'sealed-fulfilled', orderId: String(id), on: !!on });
+    return true;
+  }
+
+  /** Remove a Ship-Sealed order (cancelled/refunded). */
+  removeSealedOrder(id) {
+    const o = this.sealedOrders.get(String(id));
+    if (!o || o.status === 'cancelled') return false;
+    o.status = 'cancelled';
+    o.cancelledAt = Date.now();
+    this._persist();
+    this.emit('change', { reason: 'sealed-cancelled', orderId: String(id) });
+    return true;
   }
 
   /** Cancelled slots (grouped by buyer batch) for the admin Cancelled section. */

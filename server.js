@@ -395,6 +395,15 @@ app.post('/api/events/:id/add-entry', requireAuth, (req, res) => {
   res.json({ ok: !!entry, entry: entry || null });
 });
 
+// ── Ship-Sealed internal queue ──
+// Mark a sealed order packed/shipped (body {on:true}) or undo ({on:false}).
+app.post('/api/sealed/:id/fulfill', requireAuth, (req, res) => {
+  const on = req.body && req.body.on === false ? false : true;
+  res.json({ ok: queue.markSealedFulfilled(req.params.id, on) });
+});
+// Remove a sealed order from the queue (cancelled/refunded).
+app.post('/api/sealed/:id/remove', requireAuth, (req, res) => res.json({ ok: queue.removeSealedOrder(req.params.id) }));
+
 // Order combining: mode = 'always' | 'off' | 'time'; windowMinutes for 'time'.
 app.post('/api/combine', requireAuth, (req, res) => {
   const ok = queue.setCombineMode(req.body && req.body.mode, req.body && req.body.windowMinutes);

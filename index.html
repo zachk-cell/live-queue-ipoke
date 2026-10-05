@@ -222,6 +222,17 @@
   .srcbadge.TT{background:#0e2a44;color:#69c9ff}
   .srcbadge.SF{background:#241a44;color:#b39cff}
   .srcbadge.MIX{background:#31384a;color:#cdd4e4}
+  /* (#9) Cross-queue bubbles on Rip-Live rows: E = also in an event, S = also ship-sealed */
+  .xqbub{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;
+    font-size:11px;font-weight:800;flex:none;vertical-align:middle}
+  .xqbub.xq-e{background:#123a2a;color:#57e0a6;border:1px solid #1c5133}
+  .xqbub.xq-s{background:#3a2a0c;color:#ffc879;border:1px solid #6a5010}
+  /* (#8) Ship-Sealed queue rows */
+  .sealrow{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+  .sealrow .who{flex:1;min-width:0}
+  .sealrow .items{color:var(--muted);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sealdone{background:#12331f;border:1px solid #1c5133;color:#43e08a;cursor:pointer;font-size:12px;font-weight:700;padding:6px 11px;border-radius:8px;white-space:nowrap}
+  .sealdone:hover{filter:brightness(1.15)}
   .slot.prepped{border-color:var(--done);box-shadow:0 0 0 1px rgba(37,194,110,.5) inset}
   .badge.prepbadge{background:var(--done);color:#04180d}
   .prepb{background:transparent;color:var(--done);border:1px solid var(--line)}
@@ -417,7 +428,7 @@
 
   <div id="queue-block">
     <div class="sectitle" style="display:flex;align-items:center;gap:10px">
-      <span>Active queue — top is next</span>
+      <span>Active queue — Rip Live — top is next</span>
       <label class="pagesize">Show
         <select id="page-size" onchange="setQueuePageSize(this.value)">
           <option value="10">10</option>
@@ -430,6 +441,12 @@
     </div>
     <div id="queue"></div>
     <div id="queue-pager" class="qpager" style="display:none"></div>
+
+    <div class="sectitle collapser" id="sealedhead" onclick="toggleSection('sealed')" style="display:flex;align-items:center;gap:8px">
+      <span class="cav">▾</span><span>Active queue — Ship Sealed — top is next</span><span class="secount" id="sealed-count"></span>
+      <span style="margin-left:auto;color:#748099;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Internal · not on overlay</span>
+    </div>
+    <div id="sealed"></div>
 
     <div class="sectitle collapser" id="fhead" onclick="toggleSection('fulfilled')" style="display:flex;align-items:center;gap:8px">
       <span class="cav">▾</span><span>Fulfilled today</span><span class="secount" id="f-count"></span>
@@ -923,17 +940,22 @@
   // Collapse/expand the Fulfilled + Cancelled sections (state kept in memory so
   // it persists across live updates).
   let fulfilledCollapsed=false, cancelledCollapsed=false;
+  let sealedCollapsed=false;
   function toggleSection(which){
-    if(which==='fulfilled') fulfilledCollapsed=!fulfilledCollapsed; else cancelledCollapsed=!cancelledCollapsed;
+    if(which==='fulfilled') fulfilledCollapsed=!fulfilledCollapsed;
+    else if(which==='sealed') sealedCollapsed=!sealedCollapsed;
+    else cancelledCollapsed=!cancelledCollapsed;
     applyCollapse();
   }
   function applyCollapse(){
-    const fEl=document.getElementById('fulfilled'), cEl=document.getElementById('cancelled');
-    const fh=document.getElementById('fhead'), ch=document.getElementById('chead');
+    const fEl=document.getElementById('fulfilled'), cEl=document.getElementById('cancelled'), sEl=document.getElementById('sealed');
+    const fh=document.getElementById('fhead'), ch=document.getElementById('chead'), sh=document.getElementById('sealedhead');
     if(fEl) fEl.style.display=fulfilledCollapsed?'none':'';
     if(fh) fh.classList.toggle('collapsed',fulfilledCollapsed);
     if(cEl) cEl.style.display=cancelledCollapsed?'none':'';
     if(ch) ch.classList.toggle('collapsed',cancelledCollapsed);
+    if(sEl) sEl.style.display=sealedCollapsed?'none':'';
+    if(sh) sh.classList.toggle('collapsed',sealedCollapsed);
   }
 
   // Toggle the inline "all items" panel for a slot. Purely visual — flips a
@@ -987,6 +1009,10 @@
     // iPoke-only per-slot extras (source badge + prepped badge + prep/name/combine buttons).
     const perp = !!state.perpetual;
     const srcBadge = (perp && e.sourceShort) ? `<span class="srcbadge ${esc(e.sourceShort)}">${esc(e.sourceShort)}</span>` : '';
+    // (#9) Cross-queue bubbles: E = this order also has an event seat; S = this
+    // order also has a Ship-Sealed part. Both can show when an order spans all three.
+    const eBubble = e.hasEventPart ? '<span class="xqbub xq-e" title="This order also has a spot in an event">E</span>' : '';
+    const sBubble = e.hasSealedPart ? '<span class="xqbub xq-s" title="This order also has a Ship-Sealed item in the Ship-Sealed queue">S</span>' : '';
     const prepBadge = e.prepped ? '<span class="badge prepbadge">✓ PREPPED</span>' : '';
     const nameFlag = e.nameOverridden ? '<span class="badge multi" title="Display name manually set">✎ renamed</span>' : '';
     // untiltop: this slot is being packed (at/after top) and the buyer ordered
@@ -1005,7 +1031,7 @@
     return `<div class="slotmain">`
       + `<button class="removeb" title="Remove from queue (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`
       + `<div class="pos">${e.position}</div>`
-      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${idTag} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
+      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
       + `<div class="items">${esc(itemStr)}</div>`
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
@@ -1327,10 +1353,11 @@
     if(!events || !qb) return;
     const main = qb.parentNode;
     if(eventsBelow){
-      // Move Events inside the queue block, just under the active queue list.
-      const pager = document.getElementById('queue-pager');
-      const anchor = pager ? pager.nextSibling : qb.firstChild;
-      if(events.parentNode !== qb || events.nextSibling !== anchor) qb.insertBefore(events, anchor);
+      // Move Events inside the queue block, just above "Fulfilled today" — i.e.
+      // below BOTH the Rip-Live and Ship-Sealed queues.
+      const fhead = document.getElementById('fhead');
+      const anchor = fhead || null;
+      if(anchor && (events.parentNode !== qb || events.nextSibling !== anchor)) qb.insertBefore(events, anchor);
     } else {
       // Default: Events sits directly above the queue block.
       if(events.parentNode !== main || events.nextSibling !== qb) main.insertBefore(events, qb);
@@ -1345,6 +1372,37 @@
     try { localStorage.setItem('ipoke.eventsBelow', eventsBelow?'1':'0'); } catch {}
     applySectionOrder();
     updateSectionOrderBtn();
+  }
+
+  // ── Ship-Sealed queue (#8) — internal pull/pack/ship list ──
+  function renderSealed(){
+    const el=document.getElementById('sealed');
+    const sh=document.getElementById('sealed-count');
+    if(!el) return;
+    const list=state.sealed||[];
+    const done=state.sealedDone||0;
+    if(sh) sh.textContent=(list.length?'('+list.length+')':'')+(done?(' · '+done+' shipped'):'');
+    const sig=JSON.stringify(list.map(s=>[s.id,s.position,s.buyer,s.itemCount,s.isPriority?1:0,(s.orderName||''),(s.items||[]).map(i=>i.qty+i.name).join('|')]));
+    if(el._sig===sig) return; el._sig=sig;
+    if(!list.length){ el.innerHTML='<div class="empty" style="padding:8px 2px;color:#748099;font-size:13px">No sealed orders to pull.</div>'; return; }
+    el.innerHTML=list.map(s=>{
+      const itemStr=(s.items||[]).map(i=>`${i.qty}× ${i.name}`).join(', ');
+      const pri=s.isPriority?'<span class="badge pri">PRIORITY</span>':'';
+      const src=s.source?`<span class="srcbadge ${esc(srcShort(s.source))}">${esc(srcShort(s.source))}</span>`:'';
+      const ord=esc(s.orderName||(s.id?('#'+shortId(s.id)):''));
+      return `<div class="sealrow">
+        <div class="pos">${s.position}</div>
+        <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span></div>
+          <div class="items">${esc(itemStr)}</div></div>
+        <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
+        <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
+      </div>`;
+    }).join('');
+  }
+  async function sealedFulfill(id,on){ try{ await postJSON('/api/sealed/'+encodeURIComponent(id)+'/fulfill',{on}); }catch{ alert("Couldn't update — check your connection."); } }
+  async function sealedRemove(id){
+    const ok=await uiConfirm({title:'Remove this sealed order?',body:'Removes it from the Ship-Sealed queue (e.g. the order was cancelled or refunded).',confirmText:'Remove',danger:true});
+    if(ok) await postJSON('/api/sealed/'+encodeURIComponent(id)+'/remove',{});
   }
 
   function render(){
@@ -1398,6 +1456,8 @@
     renderVariantsAdmin();
     renderHeldAdmin();
     renderEventsAdmin();
+    renderSealed();
+    applyCollapse();
     updateCombineBar();
 
     const fEl = document.getElementById('fulfilled');
