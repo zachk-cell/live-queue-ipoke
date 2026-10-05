@@ -653,7 +653,11 @@ export class QueueEngine extends EventEmitter {
       if (o.status === 'queued' && o.id) ids.add(String(o.id));
     }
     for (const e of this.eventEntries.values()) {
-      if (e.status === 'queued' && e.orderId && /^shop:/.test(String(e.orderId))) {
+      // Include per-slot FULFILLED seats too, not just queued ones: an event can
+      // be mid-rip with some seats already fulfilled while the full roster (queued
+      // + fulfilled) stays visible and printable in the admin. Matches eventQueue's
+      // own roster filter, so every label that can be printed gets the current name.
+      if ((e.status === 'queued' || e.status === 'fulfilled') && e.orderId && /^shop:/.test(String(e.orderId))) {
         ids.add(String(e.orderId));
       }
     }
