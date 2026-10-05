@@ -25,6 +25,7 @@ const SEALED_FILE = path.join(DATA_DIR, 'sealed-state.json'); // iPoke: Ship-Sea
 const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
 const PAST_EVENTS_MAX = 200; // keep the most recent N archived events
 const PRIORITY_DOLLARS = 1000; // an order (or combined batch) at/above this $ skips the queue
+const GIVEAWAY_SORT_TS = 8640000000000000; // sentinel createdAt so the giveaway seat always sorts LAST
 const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
 
 // Order-combining modes (how a buyer's repeat orders are grouped into one slot):
@@ -137,6 +138,9 @@ export class QueueEngine extends EventEmitter {
     // and be missed entirely if that order were fulfilled first. The permanent
     // reachedTopAt guard means an already-counted order is never counted twice.
     try { if (this._markTopReached()) this._persist(); } catch (e) { console.warn('[queue] boot top-stamp failed:', e.message); }
+    // (#6) Give any existing open (Omega) quack its auto giveaway seat on boot, so
+    // the rule applies to events that already existed before this shipped.
+    this._backfillGiveawaySeats();
   }
 
   /** Resolve the display name for a buyer, honouring a manual override. */
@@ -1776,6 +1780,8 @@ export class QueueEngine extends EventEmitter {
       ...(sourceProductId ? { sourceProductId: String(sourceProductId) } : {}),
     };
     this.events.push(ev);
+    // (#6) An (Omega) quack always carries an auto giveaway seat, pinned last.
+    this._ensureGiveawaySeat(ev);
     this._persist();
     this.emit('change', { reason: 'event-add', eventId: ev.id });
     // Immediately pull any orders already on the board that match this new event
@@ -1793,6 +1799,8 @@ export class QueueEngine extends EventEmitter {
     if (patch.totalSpots != null) ev.totalSpots = Math.max(0, Math.floor(Number(patch.totalSpots) || 0));
     if (patch.keywords != null) ev.keywords = this._normKeywords(patch.keywords);
     if (patch.status != null && ['open', 'ripped'].includes(patch.status)) ev.status = patch.status;
+    // Title/type may now make this an (Omega) quack — ensure its giveaway seat.
+    if (ev.status !== 'ripped') this._ensureGiveawaySeat(ev);
     this._persist();
     this.emit('change', { reason: 'event-update', eventId: id });
     // Edited keywords/spots/status may newly match queued orders — sweep them in.
@@ -2042,6 +2050,57 @@ export class QueueEngine extends EventEmitter {
     return entry;
   }
 
+  /** True if an event is an (Omega) tier event — matched on its title, tolerant of
+   *  spacing/case, e.g. "(Omega) ...", "(OMEGA) ...". */
+  _isOmegaEvent(ev) {
+    return !!ev && /\(\s*omega\s*\)/i.test(String(ev.title || ''));
+  }
+
+  /** (#6) Ensure an (Omega) quack has exactly one auto giveaway seat, always
+   *  pinned LAST (via a far-future sort timestamp). Filled with a GIVEAWAY
+   *  placeholder you can rename to the winner. Idempotent — never adds a second.
+   *  Returns true if it added one. */
+  _ensureGiveawaySeat(ev) {
+    if (!this._isOmegaEvent(ev)) return false;
+    for (const e of this.eventEntries.values()) {
+      if (e.eventId === ev.id && e.giveaway && e.status !== 'cancelled') return false;
+    }
+    const uniq = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const entryId = `evt:${ev.id}:giveaway:${uniq}`;
+    this.eventEntries.set(entryId, {
+      id: entryId,
+      eventId: ev.id,
+      orderId: '',
+      orderName: '',
+      buyerId: `giveaway:${entryId}`,
+      buyer: '🎁 GIVEAWAY',
+      nameOverridden: true,
+      itemName: ev.title,
+      spots: 1,
+      total: 0,
+      source: 'Giveaway',
+      createdAt: GIVEAWAY_SORT_TS, // always sorts last
+      receivedAt: Date.now(),
+      status: 'queued',
+      manual: true,
+      giveaway: true,
+    });
+    return true;
+  }
+
+  /** Boot backfill: give every existing open (Omega) quack its giveaway seat. */
+  _backfillGiveawaySeats() {
+    try {
+      let added = 0;
+      for (const ev of (this.events || [])) {
+        if (ev.status !== 'ripped' && this._ensureGiveawaySeat(ev)) added++;
+      }
+      if (added) this._persist();
+    } catch (e) {
+      console.warn('[queue] giveaway backfill failed:', e.message);
+    }
+  }
+
   /** The ordered side-queue for one event (first-in-first-served, no skipping),
    *  plus spot totals. */
   eventQueue(id) {
@@ -2084,7 +2143,8 @@ export class QueueEngine extends EventEmitter {
         source: e.source || '',
         orderId: e.orderId,
         orderName: e.orderName || '',
-        createdAt: e.createdAt,
+        createdAt: e.createdAt === GIVEAWAY_SORT_TS ? null : e.createdAt,
+        giveaway: !!e.giveaway,
         fulfilled: e.status === 'fulfilled',
         fulfilledAt: e.fulfilledAt || null,
         // Oversold if any of this entry's spots land beyond the cap.
