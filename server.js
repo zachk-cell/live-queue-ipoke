@@ -18,7 +18,7 @@ import { authenticator } from 'otplib';
 
 import { QueueEngine } from './queue.js';
 import { tiktokEnabled, mountAuth, startPolling, tiktokBoot, tiktokStatus, tiktokTokensForEnv, debugShops, refetchShopCipher, debugRawOrder, debugCancellations } from './tiktok.js';
-import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates } from './shopify.js';
+import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates, fetchOrderShipping } from './shopify.js';
 import { startDiscord, discordEnabled } from './discord.js';
 import { startSimulator } from './simulator.js';
 
@@ -170,6 +170,21 @@ function publicView() {
         totalSpots: e.totalSpots, spotsOrdered: e.spotsOrdered,
         spotsRemaining: e.spotsRemaining, soldOut: e.soldOut,
       })),
+    // (#11) When an event is toggled "on overlay", spotlight it on the public page
+    // too — its running roster (position + buyer first-name, unfulfilled only),
+    // exactly like the overlay. Public-safe fields only.
+    activeEventId: (live && snap.activeEvent) ? snap.activeEventId : null,
+    activeEvent: (live && snap.activeEvent) ? {
+      title: snap.activeEvent.title,
+      type: snap.activeEvent.type,
+      totalSpots: snap.activeEvent.totalSpots,
+      spotsOrdered: snap.activeEvent.spotsOrdered,
+      spotsRemaining: snap.activeEvent.spotsRemaining,
+      soldOut: snap.activeEvent.soldOut,
+      entries: (snap.activeEvent.entries || [])
+        .filter((e) => !e.fulfilled)
+        .map((e, i) => ({ position: i + 1, buyer: e.buyer, spots: e.spots })),
+    } : null,
   };
 }
 
@@ -403,6 +418,12 @@ app.post('/api/sealed/:id/fulfill', requireAuth, (req, res) => {
 });
 // Remove a sealed order from the queue (cancelled/refunded).
 app.post('/api/sealed/:id/remove', requireAuth, (req, res) => res.json({ ok: queue.removeSealedOrder(req.params.id) }));
+// On-demand packing-label data (full name + shipping address + items) for one
+// order. Isolated from the poller so an address-permission issue can't halt ingest.
+app.get('/api/order-shipping/:id', requireAuth, async (req, res) => {
+  try { res.json(await fetchOrderShipping(req.params.id)); }
+  catch (e) { res.json({ ok: false, error: String(e && e.message || e) }); }
+});
 
 // Order combining: mode = 'always' | 'off' | 'time'; windowMinutes for 'time'.
 app.post('/api/combine', requireAuth, (req, res) => {

@@ -64,6 +64,13 @@
   .ev .evspots .sub{display:block;font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px}
   .ev.full{border-left-color:var(--muted);opacity:.75}
   .ev.full .evspots .n{color:var(--muted)}
+  /* (#11) Active-event spotlight — mirrors the overlay on the public page */
+  #spotlight{margin-bottom:16px}
+  .spot{background:var(--panel);border:1px solid var(--pri);border-radius:14px;padding:14px 14px 8px;box-shadow:0 0 0 1px rgba(255,180,60,.12)}
+  .spot-h{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+  .spot-title{font-weight:800;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .spot-meta{color:var(--muted);font-size:12.5px;font-weight:700;margin-bottom:10px}
+  .spot-list .row .xsp{color:var(--pri);font-weight:800;margin-left:6px}
 </style>
 </head>
 <body>
@@ -73,6 +80,7 @@
   <div id="variants"></div>
 </header>
 <main>
+  <div id="spotlight"></div>
   <div id="events"></div>
   <input id="find" class="find" placeholder="Type your username to highlight your spot…" oninput="render()" />
   <div id="list"></div>
@@ -139,6 +147,29 @@
     }).join('');
   }
 
+  // (#11) Spotlight the event that's currently "on overlay" — its live running
+  // order, so the website mirrors the overlay while an event runs.
+  function renderActiveEvent(){
+    const box = document.getElementById('spotlight');
+    if(!box) return;
+    const ev = state.activeEvent;
+    if(!ev){ box.innerHTML = ''; return; }
+    const me = (document.getElementById('find').value || '').toLowerCase();
+    const meta = Number(ev.totalSpots) > 0
+      ? (ev.soldOut ? `SOLD OUT — ${ev.spotsOrdered}/${ev.totalSpots}` : `${ev.spotsOrdered}/${ev.totalSpots} spots · ${ev.spotsRemaining} left`)
+      : `${ev.spotsOrdered} spots in`;
+    const rows = (ev.entries||[]).map(en=>{
+      const mine = me && (en.buyer||'').toLowerCase().includes(me);
+      return `<div class="row${mine?' me':''}"><div class="pos">${en.position}</div><div class="name">${esc(en.buyer)}${en.spots>1?` <span class="xsp">×${en.spots}</span>`:''}</div></div>`;
+    }).join('');
+    box.innerHTML = `<div class="spot">
+      <div class="spot-h"><span class="evtype ${ev.type==='wta'?'wta':'quack'}">${ev.type==='wta'?'WTA':'QUACK'}</span>
+        <span class="spot-title">🔴 Live now: ${esc(ev.title)}</span></div>
+      <div class="spot-meta">${meta}</div>
+      <div class="spot-list">${rows || '<div class="empty" style="padding:10px">No spots yet.</div>'}</div>
+    </div>`;
+  }
+
   function render(){
     const q = state.queue || [];
     const st = state.stats || {};
@@ -147,6 +178,7 @@
     const findBox = document.getElementById('find');
     const el = document.getElementById('list');
     renderVariants();
+    renderActiveEvent();
     renderEvents();
 
     if(!live){

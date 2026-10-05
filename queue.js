@@ -797,6 +797,10 @@ export class QueueEngine extends EventEmitter {
       // TikTok-only stores.
       source: raw.source || '',
       orderName: raw.orderName || '',
+      // Admin-only full name + shipping address for the packing label (#2). Never
+      // surfaced on the public/overlay views.
+      fullName: raw.fullName || '',
+      shipping: raw.shipping || null,
       // (untiltop) set when this order opened its own slot because the buyer's
       // earlier slot had already reached the top. Links back to that slot's key.
       afterTopOf: afterTopOf || null,
@@ -897,6 +901,9 @@ export class QueueEngine extends EventEmitter {
       // Admin-only cross-check: the buyer's unique @username (the queue label is
       // their display name). Never surfaced on the public view.
       buyerHandle: first.buyerHandle || '',
+      // Admin-only full name + shipping address for the packing label (#2).
+      fullName: first.fullName || '',
+      shipping: first.shipping || null,
       orderIds: orders.map((o) => o.id),
       // Human-facing Shopify order number(s) (e.g. "#50936") for each order in
       // the slot — what the queue displays. Falls back to the internal id only
@@ -1349,6 +1356,8 @@ export class QueueEngine extends EventEmitter {
       status: 'queued',
       source: raw.source || '',
       orderName: raw.orderName || '',
+      fullName: raw.fullName || '',
+      shipping: raw.shipping || null,
     };
     this.sealedOrders.set(sid, rec);
     this.seenEventOrders.add(sid);
@@ -1377,6 +1386,8 @@ export class QueueEngine extends EventEmitter {
       orderName: o.orderName || '',
       createdAt: o.createdAt || null,
       isPriority: (Number(o.total) || 0) >= PRIORITY_DOLLARS,
+      fullName: o.fullName || '',
+      shipping: o.shipping || null,
     }));
   }
 

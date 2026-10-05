@@ -128,6 +128,30 @@ function firstLast(customer, fallbackName) {
   return fallbackName || 'Guest';
 }
 
+// Full name for the internal packing label (NOT masked). Prefers the shipping
+// address name (who it's going to), falls back to the customer's full name.
+function fullNameOf(customer, ship) {
+  const sn = (ship && (ship.name || `${ship.firstName || ''} ${ship.lastName || ''}`) || '').trim();
+  if (sn) return sn;
+  const f = (customer && customer.firstName || '').trim();
+  const l = (customer && customer.lastName || '').trim();
+  return `${f} ${l}`.trim() || (customer && customer.displayName || '').trim();
+}
+
+// Structured shipping address for the packing label. Null when the order has none.
+function shipFrom(a) {
+  if (!a) return null;
+  const line2 = [a.city, a.provinceCode || a.province, a.zip].filter(Boolean).join(', ');
+  return {
+    name: (a.name || `${a.firstName || ''} ${a.lastName || ''}`).trim(),
+    address1: a.address1 || '',
+    address2: a.address2 || '',
+    cityStateZip: line2,
+    country: a.country || '',
+    phone: a.phone || '',
+  };
+}
+
 // Map Shopify's origin channel to a label. Native web orders come through as
 // "web"; TikTok orders synced into Shopify carry a channel/source that
 // identifies TikTok. The engine collapses this to a TT/SF badge; we keep the
@@ -577,6 +601,42 @@ export async function autoSyncEvents(queue) {
     if (msg !== _lastAutoSyncWarn) { console.warn('[shopify] event auto-sync skipped:', msg); _lastAutoSyncWarn = msg; }
   }
   return added;
+}
+
+// On-demand packing-label data for ONE order: full name, shipping address, and
+// line items. Kept OUT of the order poller so that if the app lacks Protected
+// Customer Data access for addresses, only this call fails — never order ingest.
+// `id` is the namespaced id ("shop:123…") or a bare numeric id. Admin-only route.
+export async function fetchOrderShipping(id) {
+  const num = numericId(String(id).replace(/^shop:/, ''));
+  const gid = `gid://shopify/Order/${num}`;
+  const data = await gql(
+    `query($id: ID!) {
+       order(id: $id) {
+         id name
+         customer { firstName lastName displayName }
+         shippingAddress { name firstName lastName address1 address2 city provinceCode province zip country phone }
+         lineItems(first: 50) { nodes { title variantTitle quantity } }
+       }
+     }`,
+    { id: gid },
+  );
+  const o = data && data.order;
+  if (!o) return { ok: false, error: 'order not found' };
+  const items = ((o.lineItems && o.lineItems.nodes) || []).map((li) => {
+    const title = (li.title || '').trim();
+    let variant = (li.variantTitle || '').trim();
+    if (variant.toLowerCase() === 'default title') variant = '';
+    const name = (variant && !title.toLowerCase().includes(variant.toLowerCase())) ? `${title} - ${variant}` : (title || 'Item');
+    return { name, qty: Number(li.quantity) || 1 };
+  });
+  return {
+    ok: true,
+    orderName: o.name || '',
+    fullName: fullNameOf(o.customer, o.shippingAddress),
+    shipping: shipFrom(o.shippingAddress),
+    items,
+  };
 }
 
 // Admin-only probe: pull a few recent orders and surface exactly what Shopify

@@ -90,6 +90,8 @@
   .fulfill{background:var(--done);border-color:var(--done);color:#04180d;margin-left:16px}
   .bumpb{background:transparent;color:var(--accent)}
   .labelb{background:transparent;color:#cdd4e4}
+  .labelb.packb{color:#9ad0ff;border-color:#2b4a63}
+  .labelb.packb:hover{border-color:#4a92ff;color:#cfe8ff}
   .removeb{background:transparent;color:var(--muted);border:1px solid transparent;padding:6px 9px;
     font-size:14px;line-height:1;flex:none}
   .removeb:hover{color:var(--danger);border-color:var(--danger)}
@@ -1037,7 +1039,8 @@
       + `<div class="items">${esc(itemStr)}</div>`
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
-      + `<button class="labelb" title="Print 2.25×1.25 label" onclick="printLabel('${e.key}')">🏷 Label</button>`
+      + `<button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('${e.key}')">🏷 Label</button>`
+      + `<button class="labelb packb" title="Print 4×6 packing slip — full name, shipping address, contents" onclick="printPacking('queue','${e.key}')">📦 Packing</button>`
       + `<div class="money">${money(e.total)}</div>`
       + `<div class="actions">${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
       + `<button class="holdb" title="Put on hold — moves it to the On-hold sidebar until you're ready" onclick="holdOrder('${e.key}')">⏸ Hold</button>`
@@ -1376,6 +1379,59 @@
     updateSectionOrderBtn();
   }
 
+  // --- 4x6 packing / shipping label (#2) ---
+  // Full name + shipping address + order contents, for pulling, packing & shipping.
+  // Works from a Rip-Live slot (scope 'queue') or a Ship-Sealed order (scope 'sealed').
+  async function printPacking(scope, key){
+    let orderId='', fallbackName='';
+    if(scope==='sealed'){
+      const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
+      orderId=s.id; fallbackName=s.buyer||'';
+    } else {
+      const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
+      orderId=(e.orderIds||[])[0]; fallbackName=e.buyer||'';
+    }
+    if(!orderId){ alert('No order id to look up a shipping address for.'); return; }
+    let data=null;
+    try{ data=await (await fetch('/api/order-shipping/'+encodeURIComponent(orderId),{headers:{accept:'application/json'}})).json(); }catch(e){}
+    if(!data || !data.ok){ alert("Couldn't load the shipping address"+(data&&data.error?(': '+data.error):'')+".\n\nThis can happen for a TikTok-synced order without an address on file, or if address access isn't granted in Shopify."); return; }
+    const name=data.fullName||fallbackName||'';
+    const orderNo=data.orderName||('#'+shortId(orderId));
+    const items=data.items||[];
+    const ship=data.shipping;
+    const itemLines=(items||[]).map(i=>`${i.qty}× ${esc(i.name)}`).join('<br>') || '—';
+    const addr = ship
+      ? [esc(ship.name||name), esc(ship.address1), esc(ship.address2), esc(ship.cityStateZip), esc(ship.country)].filter(Boolean).join('<br>')
+      : '<i>No shipping address on file — check Shopify.</i>';
+    const phone = (ship && ship.phone) ? `<div class="pk-addr">${esc(ship.phone)}</div>` : '';
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page{size:4in 6in;margin:0}
+      html,body{margin:0;padding:0;background:#fff;color:#000}
+      body{width:4in;height:6in;box-sizing:border-box;padding:0.28in 0.3in;font-family:Arial,Helvetica,sans-serif}
+      .pk-hdr{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #000;padding-bottom:7px}
+      .pk-hdr .t{font-size:13pt;font-weight:800;letter-spacing:.5px}
+      .pk-hdr .o{font-size:12pt;font-weight:800;font-family:'Courier New',monospace}
+      .pk-lbl{font-size:8pt;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:#555;margin:14px 0 4px}
+      .pk-name{font-size:17pt;font-weight:800;line-height:1.1}
+      .pk-addr{font-size:12.5pt;line-height:1.4}
+      .pk-items{font-size:11.5pt;line-height:1.5}
+    </style></head><body>
+      <div class="pk-hdr"><span class="t">PACKING SLIP</span><span class="o">${esc(orderNo)}</span></div>
+      <div class="pk-lbl">Ship to</div>
+      <div class="pk-name">${esc(name)||'—'}</div>
+      <div class="pk-addr">${addr}</div>
+      ${phone}
+      <div class="pk-lbl">Order contents</div>
+      <div class="pk-items">${itemLines}</div>
+      <script>window.focus();setTimeout(function(){window.print();},80);<\/script>
+    </body></html>`;
+    let f=document.getElementById('packFrame');
+    if(!f){ f=document.createElement('iframe'); f.id='packFrame';
+      f.style.cssText='position:fixed;left:-10000px;top:0;width:4.2in;height:6.2in;border:0;background:#fff';
+      document.body.appendChild(f); }
+    f.srcdoc=doc;
+  }
+
   // ── Ship-Sealed queue (#8) — internal pull/pack/ship list ──
   function renderSealed(){
     const el=document.getElementById('sealed');
@@ -1396,6 +1452,7 @@
         <div class="pos">${s.position}</div>
         <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span></div>
           <div class="items">${esc(itemStr)}</div></div>
+        <button class="labelb packb" title="Print 4×6 packing slip — full name, shipping address, contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
         <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
         <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
       </div>`;
