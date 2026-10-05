@@ -1328,11 +1328,17 @@ export class QueueEngine extends EventEmitter {
   }
 
   // ── Ship-Sealed side-queue (iPoke, internal pull/pack/ship) ────────────────
-  /** True if a line item belongs in the Ship-Sealed queue — name contains
-   *  "ship sealed" (tolerant of a space, hyphen or underscore: "Ship Sealed",
-   *  "Ship-Sealed", "ship_sealed"), case-insensitive. */
+  /** True if a line item belongs in the Ship-Sealed queue. Matches "ship sealed"
+   *  AND "shipped sealed" (the store's actual wording), tolerant of a space,
+   *  hyphen or underscore between the words. Case-insensitive. */
   _isSealedItem(it) {
-    return /ship[\s\-_]*sealed/i.test(String((it && it.name) || ''));
+    return /ship(?:ped)?[\s\-_]*sealed/i.test(String((it && it.name) || ''));
+  }
+
+  /** True if a line item is a Shopify checkout "Tip" line (exact title), which we
+   *  never pull/pack. Mirror of the ingest-side filter for the retroactive sweep. */
+  _isTipItem(it) {
+    return String((it && it.name) == null ? '' : (it && it.name)).trim().toLowerCase() === 'tip';
   }
 
   /** Retroactively pull "Ship Sealed" items out of orders ALREADY in the Rip-Live
@@ -1341,29 +1347,34 @@ export class QueueEngine extends EventEmitter {
    *  and any that slipped through. Runs on boot and each poll. Returns how many
    *  orders had sealed items split out. */
   sweepQueuedIntoSealed() {
-    let moved = 0;
+    let moved = 0, changed = 0;
     const queued = [...this.orders.values()].filter((o) => o.status === 'queued');
     for (const o of queued) {
       const items = o.items || [];
       const sealedItems = items.filter((it) => this._isSealedItem(it));
-      if (!sealedItems.length) continue;
-      this._addSealedSlot(o.id, {
-        buyerId: o.buyerId, buyer: o.buyer, buyerHandle: o.buyerHandle,
-        total: o.total, createdAt: o.createdAt, source: o.source, orderName: o.orderName,
-        fullName: o.fullName, shipping: o.shipping,
-      }, sealedItems);
-      const remaining = items.filter((it) => !this._isSealedItem(it));
+      const hasTip = items.some((it) => this._isTipItem(it));
+      if (!sealedItems.length && !hasTip) continue;
+      if (sealedItems.length) {
+        this._addSealedSlot(o.id, {
+          buyerId: o.buyerId, buyer: o.buyer, buyerHandle: o.buyerHandle,
+          total: o.total, createdAt: o.createdAt, source: o.source, orderName: o.orderName,
+          fullName: o.fullName, shipping: o.shipping,
+        }, sealedItems);
+        moved++;
+      }
+      // Keep only the Rip-Live items: drop sealed (moved out) and tip (ignored).
+      const remaining = items.filter((it) => !this._isSealedItem(it) && !this._isTipItem(it));
       if (remaining.length) {
         o.items = remaining;
         o.hasPriority = this._isPriorityOrder(remaining);
       } else {
-        // The whole order was sealed — drop its Rip-Live slot.
+        // Nothing left for Rip-Live (whole order was sealed and/or just a tip).
         this.orders.delete(o.id);
         if (this.openBatch.get(o.buyerId) === o.batchKey) this.openBatch.delete(o.buyerId);
       }
-      moved++;
+      changed++;
     }
-    if (moved) { this._markTopReached(); this._persist(); this.emit('change', { reason: 'sealed-sweep', moved }); }
+    if (changed) { this._markTopReached(); this._persist(); this.emit('change', { reason: 'sealed-sweep', moved }); }
     return moved;
   }
 
