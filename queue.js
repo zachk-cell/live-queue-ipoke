@@ -642,7 +642,24 @@ export class QueueEngine extends EventEmitter {
    *    merge only within the window measured from the slot's first order). */
   upsertOrder(raw) {
     const id = String(raw.id);
-    if (this.orders.has(id) || this.seenEventOrders.has(id)) return this.orders.get(id) || null;
+    if (this.orders.has(id) || this.seenEventOrders.has(id)) {
+      // Already known — don't re-ingest, but DO refresh the display-only fields
+      // (buyer label + Shopify order name) from the latest fetch, so a change to
+      // the name format or a late-populated order name reaches orders already on
+      // the board (step-1's boot lookback re-sends recent orders on restart). A
+      // manual name override still wins at display time via _displayName, and we
+      // never touch items/total/status/position here.
+      const existing = this.orders.get(id);
+      if (existing) {
+        let changed = false;
+        const nb = String(raw.buyer == null ? '' : raw.buyer).trim();
+        if (nb && existing.buyer !== nb) { existing.buyer = nb; changed = true; }
+        const nn = String(raw.orderName == null ? '' : raw.orderName).trim();
+        if (nn && existing.orderName !== nn) { existing.orderName = nn; changed = true; }
+        if (changed) { this._persist(); this.emit('change', { reason: 'order-refresh', orderId: id }); }
+      }
+      return existing || null;
+    }
 
     // Off-air gate. Perpetual queues (iPoke) ingest 24/7 regardless of live.
     if (!this.live && !this.perpetual) return null;
