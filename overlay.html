@@ -224,9 +224,10 @@
                   : `${ev.spotsOrdered}/${ev.totalSpots} spots · <span class="rem">${ev.spotsRemaining} left</span>`)
               : `${ev.spotsOrdered} spots ordered`)
           + `</div>`;
-      // Event view reels through the whole roster just like the main queue when
-      // reel mode is on, so a long side-queue scrolls instead of sitting static.
-      if(REEL){
+      // Event view reels through the whole roster when reel mode is on OR whenever
+      // the roster is longer than what fits on screen (ROWS) — so a long event
+      // side-queue auto-scrolls instead of truncating to a static "+N more".
+      if(REEL || ev.entries.length > ROWS){
         moreEl.textContent = '';
         if(!ev.entries.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">No spots yet.</div>'; return; }
         renderReel(ev.entries, evtRowHtml, evtSig);
@@ -246,9 +247,9 @@
     countEl.textContent = q.length + (q.length===1?' in line':' in line');
     meta.innerHTML = '';
 
-    if(REEL){
-      // Reel mode: render EVERYONE and let the track auto-scroll. No slicing,
-      // no "+N more".
+    if(REEL || q.length > ROWS){
+      // Reel mode: render EVERYONE and let the track auto-scroll. Triggers on the
+      // ?reel=1 URL or automatically once the queue is longer than fits (ROWS).
       moreEl.textContent = '';
       if(!q.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>'; return; }
       renderReel(q);

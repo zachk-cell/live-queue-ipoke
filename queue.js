@@ -578,6 +578,22 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Set/backfill the base buyer label (e.g. "Logan Pa") on an order already in
+   *  the system. Lets the Shopify poller re-apply the current name format to
+   *  orders ingested under an older format. A manual name override (nameOverrides)
+   *  still wins at display time via _displayName, so this never clobbers a rename.
+   *  Idempotent. */
+  setBuyerName(orderId, name) {
+    const o = this.orders.get(String(orderId));
+    if (!o) return false;
+    const nm = String(name == null ? '' : name).trim();
+    if (!nm || o.buyer === nm) return false;
+    o.buyer = nm;
+    this._persist();
+    this.emit('change', { reason: 'buyer-backfill', orderId: String(orderId) });
+    return true;
+  }
+
   /** Detailed per-order records of orders still queued (unfulfilled) this
    *  session — captured when a stream is archived so nothing is silently lost. */
   queuedRecords() {

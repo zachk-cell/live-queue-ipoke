@@ -110,14 +110,18 @@ async function gql(query, variables = {}) {
 
 // ---------------- Normalization ----------------
 // Shopify gives real customer names (no @handle). Per the store's choice we show
-// the buyer publicly as "First L." — first name + last initial — so it's
-// recognizable without exposing a full legal name. Full name is never surfaced.
+// the buyer publicly as "First La" — first name + the first TWO letters of the
+// last name — so it's recognizable without exposing a full legal name. Full name
+// is never surfaced here (the packing label is the only place it appears).
 // (The team also masks names at the Shopify customer level on request, which
 // flows through here automatically; the in-app override is a further layer.)
 function firstLast(customer, fallbackName) {
   const f = (customer && customer.firstName || '').trim();
   const l = (customer && customer.lastName || '').trim();
-  if (f && l) return `${f} ${l[0].toUpperCase()}.`;
+  if (f && l) {
+    const two = (l.charAt(0).toUpperCase() + l.slice(1, 2).toLowerCase()).trim();
+    return `${f} ${two}`;
+  }
   if (f) return f;
   const dn = (customer && customer.displayName || '').trim();
   if (dn) return dn;
@@ -323,6 +327,9 @@ export function startShopifyPolling(queue) {
           // ingested before it was captured, so the queue shows the merchant
           // order number instead of the internal id. No-op once it's set.
           if (queue.setOrderName && node.name) queue.setOrderName(id, node.name);
+          // Backfill the buyer label in the current name format ("Logan Pa") for
+          // orders ingested under an older format. A manual rename still wins.
+          if (queue.setBuyerName && node.customer) queue.setBuyerName(id, firstLast(node.customer, node.name));
           // TikTok orders are ON_HOLD by default (channel-managed fulfillment) —
           // that's not a real hold, so never flag them. Clears any that were
           // previously (wrongly) flagged. Web orders honor the real status.

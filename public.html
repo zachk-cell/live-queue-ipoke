@@ -51,6 +51,8 @@
   /* Open events list (iPoke) */
   #events{margin-bottom:16px}
   .ev-h{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin:2px 4px 8px}
+  .ev-toggle{cursor:pointer;user-select:none;display:inline-block}
+  .ev-toggle:hover{color:var(--text)}
   .ev{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
     border-left:3px solid var(--pri);border-radius:11px;padding:11px 14px;margin-bottom:8px}
   .ev .evtype{font-size:10px;font-weight:800;letter-spacing:.4px;padding:3px 8px;border-radius:20px;flex:none}
@@ -108,11 +110,20 @@
   }
 
   // Open events (iPoke): name + spots remaining, until the event is closed.
+  // Collapsible: with a lot of events the list buries the queue, so it defaults
+  // to collapsed when there are more than 3. The viewer's open/closed choice is
+  // kept across live updates (eventsOpen persists outside render()).
+  let eventsOpen = null;
+  function toggleEvents(){ eventsOpen = !eventsOpen; renderEvents(); }
   function renderEvents(){
     const box = document.getElementById('events');
     const evs = state.events || [];
     if(!evs.length){ box.innerHTML = ''; return; }
-    box.innerHTML = `<div class="ev-h">🎟 Open events</div>` + evs.map(e=>{
+    if(eventsOpen === null) eventsOpen = evs.length <= 3; // default: collapsed when many
+    const caret = eventsOpen ? '▾' : '▸';
+    const header = `<div class="ev-h ev-toggle" onclick="toggleEvents()">${caret} 🎟 Open events (${evs.length})</div>`;
+    if(!eventsOpen){ box.innerHTML = header; return; }
+    box.innerHTML = header + evs.map(e=>{
       const type = e.type==='wta' ? 'WTA' : 'QUACK';
       const hasTotal = Number(e.totalSpots) > 0;
       const spotsHtml = e.soldOut
