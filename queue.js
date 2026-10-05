@@ -563,6 +563,21 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Set/backfill the human-facing Shopify order name (e.g. "#50936") on an
+   *  order already in the system. Used by the Shopify poller to fill in the name
+   *  for orders that were ingested before the name was captured, so the queue can
+   *  display the merchant order number instead of the internal id. Idempotent. */
+  setOrderName(orderId, name) {
+    const o = this.orders.get(String(orderId));
+    if (!o) return false;
+    const nm = String(name == null ? '' : name).trim();
+    if (!nm || o.orderName === nm) return false;
+    o.orderName = nm;
+    this._persist();
+    this.emit('change', { reason: 'ordername-backfill', orderId: String(orderId) });
+    return true;
+  }
+
   /** Detailed per-order records of orders still queued (unfulfilled) this
    *  session — captured when a stream is archived so nothing is silently lost. */
   queuedRecords() {
@@ -778,6 +793,10 @@ export class QueueEngine extends EventEmitter {
       // their display name). Never surfaced on the public view.
       buyerHandle: first.buyerHandle || '',
       orderIds: orders.map((o) => o.id),
+      // Human-facing Shopify order number(s) (e.g. "#50936") for each order in
+      // the slot — what the queue displays. Falls back to the internal id only
+      // for orders whose name hasn't been captured yet.
+      orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
       orderCount: orders.length,
       // Per-order breakdown (oldest first) so the panel can group the expanded
       // view by order number and separate anything added after the buyer hit #1.
@@ -1058,6 +1077,7 @@ export class QueueEngine extends EventEmitter {
         buyer: this._displayName(first.buyerId, first.buyer),
         buyerId: first.buyerId,
         orderIds: orders.map((o) => o.id),
+        orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
         itemCount: orders.reduce((n, o) => n + o.items.reduce((m, i) => m + (i.qty || 1), 0), 0),
         total: orders.reduce((s, o) => s + o.total, 0),
         fulfilledAt: Math.max(...orders.map((o) => o.fulfilledAt || 0)),
@@ -1196,6 +1216,7 @@ export class QueueEngine extends EventEmitter {
         buyer: this._displayName(first.buyerId, first.buyer),
         buyerId: first.buyerId,
         orderIds: orders.map((o) => o.id),
+        orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
         itemCount: orders.reduce((n, o) => n + o.items.reduce((m, i) => m + (i.qty || 1), 0), 0),
         total: orders.reduce((s, o) => s + o.total, 0),
         cancelledAt: Math.max(...orders.map((o) => o.cancelledAt || 0)),

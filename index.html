@@ -615,6 +615,20 @@
   // ellipsis so it's clearly a partial. Full numbers stay in the expanded view,
   // the printed label, and the CSV export.
   function shortId(id){ const s=String(id); return s.length>8 ? '…'+s.slice(-8) : s; }
+  // Display order number(s) for a slot: prefer the Shopify order name ("#50936"),
+  // falling back to a shortened internal id only if a name hasn't been captured
+  // for that order yet. Names already include the leading "#".
+  function orderNoList(e){
+    const names = (e && e.orderNames) || [];
+    const ids = (e && e.orderIds) || [];
+    const n = Math.max(names.length, ids.length);
+    const out = [];
+    for(let i=0;i<n;i++){
+      const nm = names[i] && String(names[i]).trim();
+      out.push(nm ? nm : ('#'+shortId(ids[i])));
+    }
+    return out;
+  }
   // Short-form date + time in Pacific for when an order came in (e.g. "9/17, 8:42 AM").
   function fmtPST(ms){
     if(!ms) return '';
@@ -681,8 +695,8 @@
     const e = (state.queue||[]).find(x=>x.key===key);
     if(!e) return;
     const uname = e.buyer || 'Buyer';
-    const ords = (e.orderIds||[]);
-    const ordLine = ords.map(id=>'#'+id).join('   ');
+    const ords = orderNoList(e);
+    const ordLine = ords.join('   ');
     const countLine = (e.orderCount>1) ? (e.orderCount+' orders in this batch') : '';
     // Thermal printers only lay down BLACK, and browsers skip background fills
     // unless "Background graphics" is on — so flags are black text in a black
@@ -848,7 +862,7 @@
     // sealing, without implying the buyer asked to cancel.
     const holdBadge = e.onHold ? `<span class="badge hold" title="This order is ON HOLD in Shopify (giveaway, address/fraud, or manual review). It still needs checking before you seal/ship — but a hold is not a cancellation.">⏸ ON HOLD</span>` : '';
     const idTag = e._dupName ? `<span class="idtag" title="Buyer id (last 4) — tells same-named buyers apart">id …${esc(e._idTag)}</span>` : '';
-    const ordNos = `<span class="ordno">${e.orderIds.map(id=>'#'+esc(shortId(id))).join(' ')}</span>`;
+    const ordNos = `<span class="ordno">${orderNoList(e).map(n=>esc(n)).join(' ')}</span>`;
     // Expanded view: items grouped by order number, with anything the buyer added
     // after hitting #1 pulled out under a green "Added since top of queue" header.
     const lines = e.orderLines || e.orderIds.map(id=>({id, items:e.items, addedSinceTop:false}));
@@ -867,7 +881,7 @@
     if(added.length){
       detailItems += `<div class="dsub">＋ Added since top of queue</div>` + added.map(groupHtml).join('');
     }
-    const detailOrds = `<div class="dord">Full order number${e.orderIds.length>1?'s':''}: ${e.orderIds.map(id=>'#'+esc(id)).join('  ')}</div>`;
+    const detailOrds = `<div class="dord">Order number${orderNoList(e).length>1?'s':''}: ${orderNoList(e).map(n=>esc(n)).join('  ')}</div>`;
     // iPoke-only per-slot extras (source badge + prepped badge + prep/name/combine buttons).
     const perp = !!state.perpetual;
     const srcBadge = (perp && e.sourceShort) ? `<span class="srcbadge ${esc(e.sourceShort)}">${esc(e.sourceShort)}</span>` : '';
@@ -963,8 +977,9 @@
     // For order-number search, compare on an alphanumeric-only form so a partial
     // like the last 6 digits matches regardless of a leading "#" or spaces.
     const fAlnum = filter.replace(/[^a-z0-9]/g,'');
-    const matchOrderNo = (e) => fAlnum && (e.orderIds||[]).some(id =>
-      String(id).toLowerCase().replace(/[^a-z0-9]/g,'').includes(fAlnum));
+    const matchOrderNo = (e) => fAlnum && (
+      (e.orderNames||[]).some(n => String(n).toLowerCase().replace(/[^a-z0-9]/g,'').includes(fAlnum))
+      || (e.orderIds||[]).some(id => String(id).toLowerCase().replace(/[^a-z0-9]/g,'').includes(fAlnum)));
     // Detect buyers who share an identical display name with ANOTHER buyer in
     // the queue (different people, same TikTok name). Count over the WHOLE queue
     // so a search filter never hides a duplicate. (#4)
@@ -1286,11 +1301,11 @@
     const fEl = document.getElementById('fulfilled');
     const f = state.fulfilled||[];
     document.getElementById('f-count').textContent = f.length ? '('+f.length+')' : '';
-    const fSig = JSON.stringify(f.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderIds||[]).join(',')]));
+    const fSig = JSON.stringify(f.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderNames||[]).join(','),(s.orderIds||[]).join(',')]));
     if(fSig !== fulfilledSig){
       fulfilledSig = fSig;
       fEl.innerHTML = f.length ? f.map(s=>`<div class="done-row">
-          <span class="ordno">${(s.orderIds||[]).map(id=>'#'+esc(id)).join(' ')}</span>
+          <span class="ordno">${orderNoList(s).map(n=>esc(n)).join(' ')}</span>
           <span class="name">${esc(s.buyer)}</span>
           <span>${s.itemCount} item${s.itemCount===1?'':'s'}</span>
           <span style="margin-left:auto">${money(s.total)}</span>
@@ -1301,11 +1316,11 @@
     const cEl = document.getElementById('cancelled');
     const c = state.cancelled||[];
     document.getElementById('c-count').textContent = c.length ? '('+c.length+')' : '';
-    const cSig = JSON.stringify(c.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderIds||[]).join(',')]));
+    const cSig = JSON.stringify(c.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderNames||[]).join(','),(s.orderIds||[]).join(',')]));
     if(cSig !== cancelledSig){
       cancelledSig = cSig;
       cEl.innerHTML = c.length ? c.map(s=>`<div class="done-row cancel-row">
-          <span class="ordno">${(s.orderIds||[]).map(id=>'#'+esc(id)).join(' ')}</span>
+          <span class="ordno">${orderNoList(s).map(n=>esc(n)).join(' ')}</span>
           <span class="name">${esc(s.buyer)}</span>
           <span>${s.itemCount} item${s.itemCount===1?'':'s'}</span>
           <span style="margin-left:auto">${money(s.total)}</span>

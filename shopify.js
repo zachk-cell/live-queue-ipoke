@@ -319,6 +319,10 @@ export function startShopifyPolling(queue) {
         const nodes = await fetchOrdersMatching(idClause, Math.min(shopQueued.length, 100)).catch(() => []);
         for (const node of nodes) {
           const id = 'shop:' + numericId(node.id);
+          // Backfill the human-facing order name (#50936) for orders that were
+          // ingested before it was captured, so the queue shows the merchant
+          // order number instead of the internal id. No-op once it's set.
+          if (queue.setOrderName && node.name) queue.setOrderName(id, node.name);
           // TikTok orders are ON_HOLD by default (channel-managed fulfillment) —
           // that's not a real hold, so never flag them. Clears any that were
           // previously (wrongly) flagged. Web orders honor the real status.
