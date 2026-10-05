@@ -834,22 +834,45 @@
       const nm=esc(en.buyer||'');
       const ord=esc(en.orderName||(en.orderId?('#'+shortId(en.orderId)):''));
       const sp=Number(en.spots)||1;
-      const spTxt=(sp>1?sp+' spots':'1 spot');
-      return `<div class="lbl"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${ord?ord+' · ':''}${spTxt}</div></div>`;
+      const pos=en.position!=null?en.position:'';
+      const meta=[ord, `×${sp}`].filter(Boolean).join(' · ');
+      const posTxt=(pos!==''?('Pos '+pos):'');
+      return `<div class="lbl"><div class="pos">${posTxt}</div><div class="body"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${meta}</div></div></div>`;
     }).join('');
     const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page{size:2.25in 1.25in;margin:0}
       html,body{margin:0;padding:0;background:#fff;color:#000}
-      .lbl{width:2.25in;height:1.25in;box-sizing:border-box;padding:0.06in 0.09in;
-        display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
+      .lbl{width:2.25in;height:1.25in;box-sizing:border-box;padding:0.05in 0.08in;
+        display:flex;flex-direction:column;
         font-family:Arial,Helvetica,sans-serif;page-break-after:always;overflow:hidden}
       .lbl:last-child{page-break-after:auto}
-      .lbl .evt{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:.2px;
-        max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px}
-      .lbl .nm{font-size:16pt;font-weight:800;line-height:1.03;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      /* Position badge, pinned top-left so it's the first thing the packer reads. */
+      .lbl .pos{flex:none;font-size:8.5pt;font-weight:800;font-family:'Courier New',monospace;
+        text-align:left;line-height:1}
+      /* Everything else centered in the space below the position. */
+      .lbl .body{flex:1;min-height:0;overflow:hidden;
+        display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+      /* Both the event title and the name auto-fit: the script shrinks each to the
+         label width, and only wraps to a 2nd line if it would otherwise get too small. */
+      .lbl .evt{font-size:11pt;font-weight:700;text-transform:uppercase;letter-spacing:.2px;
+        width:100%;line-height:1.05;margin-bottom:2px}
+      .lbl .nm{font-size:20px;font-weight:800;line-height:1.05;width:100%;word-break:break-word}
       .lbl .meta{font-size:9.5pt;font-weight:700;margin-top:3px;font-family:'Courier New',monospace}
     </style></head><body>${labels}
-      <script>window.focus();setTimeout(function(){window.print();},80);<\/script>
+      <script>(function(){
+        function fit(el,start,floor){
+          if(!el) return;
+          el.style.whiteSpace='nowrap'; var s=start; el.style.fontSize=s+'px';
+          while(s>floor && el.scrollWidth>el.clientWidth){ s--; el.style.fontSize=s+'px'; }
+          if(el.scrollWidth>el.clientWidth){ el.style.whiteSpace='normal'; } // wrap at the floor
+        }
+        var lbls=document.querySelectorAll('.lbl');
+        for(var i=0;i<lbls.length;i++){
+          fit(lbls[i].querySelector('.evt'),15,7);   // event title: shrink then wrap
+          fit(lbls[i].querySelector('.nm'),20,11);    // buyer name: shrink then wrap
+        }
+        window.focus(); setTimeout(function(){window.print();},80);
+      })();<\/script>
     </body></html>`;
     let f=document.getElementById('labelFrame');
     if(!f){ f=document.createElement('iframe'); f.id='labelFrame';
