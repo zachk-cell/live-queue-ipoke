@@ -384,7 +384,11 @@ export function startShopifyPolling(queue) {
           const sideIds = queue.labelRefreshOrderIds().filter((id) => String(id).startsWith('shop:'));
           for (let i = 0; i < sideIds.length; i += 50) {
             const chunk = sideIds.slice(i, i + 50);
-            const clause = chunk.map((id) => `id:${numericId(id)}`).join(' OR ');
+            // The queue stores ids as "shop:<numeric>"; numericId() only strips the
+            // gid:// form, so strip the "shop:" prefix here to get a valid id: query
+            // (otherwise "id:shop:123" is malformed and the search silently returns
+            // nothing — which is exactly why the first cut didn't update anything).
+            const clause = chunk.map((id) => `id:${String(id).replace(/^shop:/, '')}`).join(' OR ');
             const nodes = await fetchOrdersMatching(clause, chunk.length).catch(() => []);
             for (const node of nodes) {
               const id = 'shop:' + numericId(node.id);
