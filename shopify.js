@@ -176,7 +176,12 @@ function numericId(gid) {
   // gid://shopify/Order/1234567890 -> "1234567890"
   const s = String(gid || '');
   const m = s.match(/\/(\d+)(?:\?|$)/);
-  return m ? m[1] : s;
+  if (m) return m[1];
+  // Also handle the queue's own "shop:1234567890" id form (and a bare numeric id):
+  // without this, callers like the On-Hold refresh built an invalid "id:shop:123"
+  // search that silently matched nothing.
+  const m2 = s.match(/(\d+)\s*$/);
+  return m2 ? m2[1] : s;
 }
 
 // Shopify's checkout "add a tip" (defaulted, often left at $0) adds a line item
