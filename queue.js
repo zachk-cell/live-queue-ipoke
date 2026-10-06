@@ -1320,6 +1320,7 @@ export class QueueEngine extends EventEmitter {
       // Ship-Sealed internal queue (never surfaced on public/overlay views).
       sealed: this.sealedQueue(),
       sealedDone: this.sealedDoneCount(),
+      sealedFulfilled: this.sealedFulfilled(),
     };
   }
 
@@ -1484,11 +1485,34 @@ export class QueueEngine extends EventEmitter {
     }));
   }
 
-  /** How many Ship-Sealed orders have been packed/shipped (fulfilled) this run. */
+  /** How many Ship-Sealed orders were packed/shipped TODAY (Pacific day). Scoped
+   *  to today so it resets on the same daily rollover as the main queue's
+   *  "Fulfilled today" — older shipped records are retained internally but not
+   *  counted here. */
   sealedDoneCount() {
+    const today = this._laDateString();
     let n = 0;
-    for (const o of this.sealedOrders.values()) if (o.status === 'fulfilled') n++;
+    for (const o of this.sealedOrders.values()) {
+      if (o.status === 'fulfilled' && o.fulfilledAt && this._laDateString(o.fulfilledAt) === today) n++;
+    }
     return n;
+  }
+
+  /** The Ship-Sealed orders packed/shipped TODAY (Pacific day), newest first —
+   *  powers the "Fulfilled Today — Ship Sealed" list with per-row undo. */
+  sealedFulfilled() {
+    const today = this._laDateString();
+    return [...this.sealedOrders.values()]
+      .filter((o) => o.status === 'fulfilled' && o.fulfilledAt && this._laDateString(o.fulfilledAt) === today)
+      .sort((a, b) => (b.fulfilledAt || 0) - (a.fulfilledAt || 0))
+      .map((o) => ({
+        id: o.id,
+        buyer: this._displayName(o.buyerId, o.buyer),
+        orderName: o.orderName || '',
+        itemCount: (o.items || []).reduce((n, it) => n + (Number(it.qty) || 1), 0),
+        total: Number(o.total) || 0,
+        fulfilledAt: o.fulfilledAt || null,
+      }));
   }
 
   /** Mark a Ship-Sealed order packed/shipped (or undo). */

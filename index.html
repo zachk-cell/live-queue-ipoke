@@ -465,8 +465,14 @@
     </div>
     <div id="sealed"></div>
 
+    <div class="sectitle collapser" id="sealeddonehead" onclick="toggleSection('sealeddone')" style="display:flex;align-items:center;gap:8px">
+      <span class="cav">▾</span><span>Fulfilled Today — Ship Sealed</span><span class="secount" id="sd-count"></span>
+      <span style="margin-left:auto;color:#748099;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Internal · not on overlay</span>
+    </div>
+    <div id="sealeddone"></div>
+
     <div class="sectitle collapser" id="fhead" onclick="toggleSection('fulfilled')" style="display:flex;align-items:center;gap:8px">
-      <span class="cav">▾</span><span>Fulfilled today</span><span class="secount" id="f-count"></span>
+      <span class="cav">▾</span><span>Fulfilled Today — Rip Live</span><span class="secount" id="f-count"></span>
       <a href="/api/export" style="text-decoration:none;margin-left:auto" onclick="event.stopPropagation()"><button class="ghost">⬇ Export CSV</button></a>
     </div>
     <div id="fulfilled"></div>
@@ -980,22 +986,26 @@
   // Collapse/expand the Fulfilled + Cancelled sections (state kept in memory so
   // it persists across live updates).
   let fulfilledCollapsed=false, cancelledCollapsed=false;
-  let sealedCollapsed=false;
+  let sealedCollapsed=false, sealedDoneCollapsed=true; // shipped-today list starts collapsed
   function toggleSection(which){
     if(which==='fulfilled') fulfilledCollapsed=!fulfilledCollapsed;
     else if(which==='sealed') sealedCollapsed=!sealedCollapsed;
+    else if(which==='sealeddone') sealedDoneCollapsed=!sealedDoneCollapsed;
     else cancelledCollapsed=!cancelledCollapsed;
     applyCollapse();
   }
   function applyCollapse(){
     const fEl=document.getElementById('fulfilled'), cEl=document.getElementById('cancelled'), sEl=document.getElementById('sealed');
     const fh=document.getElementById('fhead'), ch=document.getElementById('chead'), sh=document.getElementById('sealedhead');
+    const sdEl=document.getElementById('sealeddone'), sdh=document.getElementById('sealeddonehead');
     if(fEl) fEl.style.display=fulfilledCollapsed?'none':'';
     if(fh) fh.classList.toggle('collapsed',fulfilledCollapsed);
     if(cEl) cEl.style.display=cancelledCollapsed?'none':'';
     if(ch) ch.classList.toggle('collapsed',cancelledCollapsed);
     if(sEl) sEl.style.display=sealedCollapsed?'none':'';
     if(sh) sh.classList.toggle('collapsed',sealedCollapsed);
+    if(sdEl) sdEl.style.display=sealedDoneCollapsed?'none':'';
+    if(sdh) sdh.classList.toggle('collapsed',sealedDoneCollapsed);
   }
 
   // Toggle the inline "all items" panel for a slot. Purely visual — flips a
@@ -1525,7 +1535,10 @@
     if(!el) return;
     const list=state.sealed||[];
     const done=state.sealedDone||0;
-    if(sh) sh.textContent=(list.length?'('+list.length+')':'')+(done?(' · '+done+' shipped'):'');
+    if(sh) sh.textContent=(list.length?'('+list.length+')':'')+(done?(' · '+done+' shipped today'):'');
+    // Fulfilled Today — Ship Sealed list (with per-row undo). Rendered before the
+    // active list's sig early-return below, so it always refreshes.
+    renderSealedDone();
     const sig=JSON.stringify(list.map(s=>[s.id,s.position,s.buyer,s.itemCount,s.isPriority?1:0,(s.orderName||''),(s.items||[]).map(i=>i.qty+i.name).join('|')]));
     if(el._sig===sig) return; el._sig=sig;
     if(!list.length){ el.innerHTML='<div class="empty" style="padding:8px 2px;color:#748099;font-size:13px">No sealed orders to pull.</div>'; return; }
@@ -1544,6 +1557,28 @@
       </div>`;
     }).join('');
     tickTimers(); // fill the in-queue timers immediately on (re)render
+  }
+  // Fulfilled Today — Ship Sealed: today's packed/shipped orders with one-click undo
+  // (un-ship → back into the Ship-Sealed queue). Resets daily with the Pacific rollover.
+  function renderSealedDone(){
+    const el=document.getElementById('sealeddone');
+    const cnt=document.getElementById('sd-count');
+    if(!el) return;
+    const list=state.sealedFulfilled||[];
+    if(cnt) cnt.textContent=list.length?('('+list.length+')'):'';
+    const sig=JSON.stringify(list.map(s=>[s.id,s.buyer,s.itemCount,s.total,(s.orderName||'')]));
+    if(el._sig===sig) return; el._sig=sig;
+    el.innerHTML = list.length ? list.map(s=>{
+      const ord=esc(s.orderName||(s.id?('#'+shortId(s.id)):''));
+      return `<div class="done-row">
+        <span class="ordno">${ord}</span>
+        <span class="name">${esc(s.buyer)}</span>
+        <span>${s.itemCount} item${s.itemCount===1?'':'s'}</span>
+        <span style="color:#748099;font-size:11px;white-space:nowrap">🕒 ${esc(fmtPST(s.fulfilledAt))}</span>
+        <span style="margin-left:auto">${money(s.total)}</span>
+        <button class="undob" title="Un-ship: put this order back into the Ship-Sealed queue" onclick="sealedFulfill('${s.id}',false)">↩ Undo</button>
+      </div>`;
+    }).join('') : '<div class="empty" style="padding:8px 2px;color:#748099;font-size:13px">Nothing shipped yet today.</div>';
   }
   async function sealedFulfill(id,on){ try{ await postJSON('/api/sealed/'+encodeURIComponent(id)+'/fulfill',{on}); }catch{ alert("Couldn't update — check your connection."); } }
   async function sealedRemove(id){
