@@ -1433,10 +1433,11 @@
     if(!events || !qb) return;
     const main = qb.parentNode;
     if(eventsBelow){
-      // Move Events inside the queue block, just above "Fulfilled today" — i.e.
-      // below BOTH the Rip-Live and Ship-Sealed queues.
-      const fhead = document.getElementById('fhead');
-      const anchor = fhead || null;
+      // Move Events inside the queue block so it sits BELOW both active queues
+      // (Rip-Live + Ship-Sealed) but ABOVE the "Fulfilled Today" sections. Anchor
+      // on the Ship-Sealed fulfilled header (first of the two fulfilled sections);
+      // fall back to the Rip-Live fulfilled header if it's ever absent.
+      const anchor = document.getElementById('sealeddonehead') || document.getElementById('fhead') || null;
       if(anchor && (events.parentNode !== qb || events.nextSibling !== anchor)) qb.insertBefore(events, anchor);
     } else {
       // Default: Events sits directly above the queue block.
