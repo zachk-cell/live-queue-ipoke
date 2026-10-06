@@ -119,8 +119,10 @@
   .prichk input{width:17px;height:17px;accent-color:var(--accent);cursor:pointer;flex:none}
   .ov-sec{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:12px}
   .ov-sec-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:14px}
-  .ov-sec-h .ov-open{color:var(--accent);font-size:12px;text-decoration:none;font-weight:700}
-  .ov-sec-h .ov-links{display:inline-flex;gap:12px}
+  .ov-sec-h .ov-open{color:var(--accent);font-size:12px;text-decoration:none;font-weight:700;
+    border:1px solid var(--accent);border-radius:7px;padding:3px 9px;line-height:1}
+  .ov-sec-h .ov-open:hover{background:var(--accent);color:#fff}
+  .ov-sec-h .ov-links{display:inline-flex;gap:8px}
   .ov-sec .ov-hint{color:var(--muted);font-size:11px;margin:4px 0 2px;line-height:1.35}
   .ov-sec label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
   .ov-sec label:first-of-type{margin-top:0}
@@ -241,6 +243,11 @@
   .sealrow{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
   .sealrow .who{flex:1;min-width:0}
   .sealrow .items{color:var(--muted);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Compact order time + live in-queue timer, pushed to the right of the name line
+     so the row height is unchanged. */
+  .sealrow .name .sealmeta{margin-left:auto;display:inline-flex;align-items:center;gap:6px;
+    font-size:10.5px;font-weight:600;color:#748099;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .sealrow .name .sealmeta .sealtimer{color:#8a93a6}
   .sealdone{background:#12331f;border:1px solid #1c5133;color:#43e08a;cursor:pointer;font-size:12px;font-weight:700;padding:6px 11px;border-radius:8px;white-space:nowrap}
   .sealdone:hover{filter:brightness(1.15)}
   .slot.prepped{border-color:var(--done);box-shadow:0 0 0 1px rgba(37,194,110,.5) inset}
@@ -420,8 +427,7 @@
     <a href="/" target="_blank" style="text-decoration:none"><button class="ghost">Public view ↗</button></a>
     <button id="combinePill" class="combine-pill" style="display:none" onclick="openCombine()">⇄ Combining: <span class="cm" id="cm-label">…</span></button>
     <button class="ghost" id="sectionOrderBtn" style="display:none" onclick="toggleSectionOrder()" title="Move the Events & side-queues section above or below the main queue">⇅ Events on top</button>
-    <a href="/overlay" target="_blank" id="overlayLink" style="text-decoration:none;display:none"><button class="ghost">📺 Overlay ↗</button></a>
-    <a href="/overlay/vault" target="_blank" id="vaultOverlayLink" style="text-decoration:none;display:none" title="Open the Vault pack-count OBS overlay (separate browser source from the queue overlay)."><button class="ghost">📦 Vault Overlay ↗</button></a>
+    <!-- Overlay open links now live inside the 🎚 Overlay Sliders lightbox (opened rarely) to keep this bar clean. -->
   </div>
 
   <div class="chips" id="pri-chips"></div>
@@ -1530,13 +1536,14 @@
       const ord=esc(s.orderName||(s.id?('#'+shortId(s.id)):''));
       return `<div class="sealrow">
         <div class="pos">${s.position}</div>
-        <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span></div>
+        <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
           <div class="items">${esc(itemStr)}</div></div>
         <button class="labelb packb" title="Print 4×6 packing slip — full name, shipping address, contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
         <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
         <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
       </div>`;
     }).join('');
+    tickTimers(); // fill the in-queue timers immediately on (re)render
   }
   async function sealedFulfill(id,on){ try{ await postJSON('/api/sealed/'+encodeURIComponent(id)+'/fulfill',{on}); }catch{ alert("Couldn't update — check your connection."); } }
   async function sealedRemove(id){
@@ -1568,8 +1575,6 @@
     if(perp) document.getElementById('offline-banner').style.display = 'none';
     // Combining is fixed ("combine until top, then lock") — no toggle shown.
     document.getElementById('combinePill').style.display = 'none';
-    document.getElementById('overlayLink').style.display = perp ? '' : 'none';
-    document.getElementById('vaultOverlayLink').style.display = perp ? '' : 'none';
     document.getElementById('events-admin').style.display = perp ? '' : 'none';
     document.getElementById('ovBtn').style.display = perp ? '' : 'none';
     document.getElementById('sectionOrderBtn').style.display = perp ? '' : 'none';
