@@ -403,6 +403,11 @@ app.post('/api/event-entry/:id/fulfill', requireAuth, (req, res) => {
 app.post('/api/event-entry/:id/name', requireAuth, (req, res) => {
   res.json({ ok: queue.setEventEntryBuyer(req.params.id, (req.body && req.body.name) || '') });
 });
+// Manually adjust how many spots a single event seat holds → { spots }. Flags the
+// seat as manually adjusted (admin-only) so an unintended change is easy to spot.
+app.post('/api/event-entry/:id/spots', requireAuth, (req, res) => {
+  res.json({ ok: queue.setEventEntrySpots(req.params.id, (req.body && req.body.spots)) });
+});
 // Manually add a seat to an event → { buyer, spots, orderName }.
 app.post('/api/events/:id/add-entry', requireAuth, (req, res) => {
   const b = req.body || {};

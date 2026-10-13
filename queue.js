@@ -26,6 +26,13 @@ const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: arch
 const PAST_EVENTS_MAX = 200; // keep the most recent N archived events
 const PRIORITY_DOLLARS = 1000; // an order (or combined batch) at/above this $ skips the queue
 const GIVEAWAY_SORT_TS = 8640000000000000; // sentinel createdAt so the giveaway seat always sorts LAST
+// House seats (Nikki + Greg) ride just BEFORE the giveaway on (Omega) quacks —
+// always the last two before it. Real/manual seats use normal (much smaller)
+// timestamps, so these two sentinels pin the pair between the roster and the
+// giveaway. The smaller value sorts first; which name gets it alternates per event.
+const HOUSE_SEAT_SORT_FIRST = GIVEAWAY_SORT_TS - 2;
+const HOUSE_SEAT_SORT_SECOND = GIVEAWAY_SORT_TS - 1;
+const HOUSE_SEAT_NAMES = ['Nikki', 'Greg'];
 const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
 
 // Order-combining modes (how a buyer's repeat orders are grouped into one slot):
@@ -99,6 +106,7 @@ export class QueueEngine extends EventEmitter {
     this.sealedOrders = new Map();
     this.pastEvents = []; // archived finished events (most recent first)
     this.eventCounter = 0;
+    this.houseSeatToggle = 0; // flips each (Omega) quack so Nikki/Greg order alternates
     this.activeEventId = null; // which event side-queue is toggled to the overlay/Discord
     // Durable dedup for orders that produced ONLY event entries (and so never
     // land in the main `orders` map). Prevents double-ingest across restarts.
@@ -178,6 +186,7 @@ export class QueueEngine extends EventEmitter {
         if (Array.isArray(cfg.events)) this.events = cfg.events;
         if (Array.isArray(cfg.fulfilledEventNames)) this.fulfilledEventNames = cfg.fulfilledEventNames;
         this.eventCounter = cfg.eventCounter || 0;
+        this.houseSeatToggle = cfg.houseSeatToggle || 0;
         this.activeEventId = cfg.activeEventId || null;
         if (cfg.overlays && typeof cfg.overlays === 'object') {
           for (const k of ['queue', 'vault']) {
@@ -526,6 +535,7 @@ export class QueueEngine extends EventEmitter {
           fulfilledEventNames: this.fulfilledEventNames,
           eventCounter: this.eventCounter,
           activeEventId: this.activeEventId,
+          houseSeatToggle: this.houseSeatToggle,
           overlays: this.overlays,
           lastRolloverDay: this.lastRolloverDay,
         })
@@ -1356,10 +1366,27 @@ export class QueueEngine extends EventEmitter {
   cancelOrder(orderId) {
     const id = String(orderId);
     // A full-order cancel on Shopify cancels every part of the order — including
-    // its Ship-Sealed slot (which may be the only part).
+    // its Ship-Sealed slot (which may be the only part) and any event/quack seats
+    // that order bought.
     const sealedCancelled = this.removeSealedOrder(id);
+    // Cancel every still-queued event/quack seat tied to this order id. (One order
+    // can hold more than one seat, and an order can be ONLY event seats with no
+    // regular/sealed part — in which case this is the only thing that fires.)
+    let eventCancelled = 0;
+    const nowC = Date.now();
+    for (const e of this.eventEntries.values()) {
+      if (String(e.orderId) === id && e.status === 'queued') {
+        e.status = 'cancelled';
+        e.cancelledAt = nowC;
+        eventCancelled++;
+      }
+    }
+    if (eventCancelled) this.emit('change', { reason: 'event-entry-cancelled', orderId: id });
     const o = this.orders.get(id);
-    if (!o || o.status !== 'queued') return sealedCancelled ? { id, sealedOnly: true } : null;
+    if (!o || o.status !== 'queued') {
+      if (sealedCancelled || eventCancelled) { this._persist(); return { id, sealedOnly: !eventCancelled, eventCancelled }; }
+      return null;
+    }
     o.status = 'cancelled';
     o.cancelledAt = Date.now();
     o.bumped = false;
@@ -1922,8 +1949,10 @@ export class QueueEngine extends EventEmitter {
       ...(sourceProductId ? { sourceProductId: String(sourceProductId) } : {}),
     };
     this.events.push(ev);
-    // (#6) An (Omega) quack always carries an auto giveaway seat, pinned last.
+    // (#6) An (Omega) quack always carries an auto giveaway seat (pinned last) plus
+    // the two house seats (Nikki + Greg) just before it.
     this._ensureGiveawaySeat(ev);
+    this._ensureHouseSeats(ev);
     this._persist();
     this.emit('change', { reason: 'event-add', eventId: ev.id });
     // Immediately pull any orders already on the board that match this new event
@@ -1941,8 +1970,8 @@ export class QueueEngine extends EventEmitter {
     if (patch.totalSpots != null) ev.totalSpots = Math.max(0, Math.floor(Number(patch.totalSpots) || 0));
     if (patch.keywords != null) ev.keywords = this._normKeywords(patch.keywords);
     if (patch.status != null && ['open', 'ripped'].includes(patch.status)) ev.status = patch.status;
-    // Title/type may now make this an (Omega) quack — ensure its giveaway seat.
-    if (ev.status !== 'ripped') this._ensureGiveawaySeat(ev);
+    // Title/type may now make this an (Omega) quack — ensure its giveaway + house seats.
+    if (ev.status !== 'ripped') { this._ensureGiveawaySeat(ev); this._ensureHouseSeats(ev); }
     this._persist();
     this.emit('change', { reason: 'event-update', eventId: id });
     // Edited keywords/spots/status may newly match queued orders — sweep them in.
@@ -2051,10 +2080,13 @@ export class QueueEngine extends EventEmitter {
       position: i + 1,
       buyer: this._displayName(e.buyerId, e.buyer),
       spots: e.spots,
+      spotsAdjusted: !!e.spotsAdjusted,
+      originalSpots: (e.originalSpots != null ? e.originalSpots : null),
       orderName: e.orderName || '',
       orderId: e.orderId || '',
       createdAt: e.createdAt || null,
       fulfilled: e.status === 'fulfilled',
+      fulfilledAt: e.fulfilledAt || null, // when this spot was marked completed
     }));
     const startedAt = entries.reduce(
       (min, e) => (e.createdAt && (min == null || e.createdAt < min) ? e.createdAt : min),
@@ -2070,6 +2102,7 @@ export class QueueEngine extends EventEmitter {
       entryCount: entries.length,
       startedAt,
       createdAt: ev.createdAt || null,
+      rippedAt: ev.rippedAt || null, // when the event was marked fulfilled (ripped)
       archivedAt: Date.now(),
       entries,
     };
@@ -2102,6 +2135,7 @@ export class QueueEngine extends EventEmitter {
       if (e.eventId === id && e.status === 'queued') { e.status = 'fulfilled'; e.fulfilledAt = now; }
     }
     ev.status = 'ripped';
+    ev.rippedAt = now; // when the whole event was marked fulfilled (ripped)
     // Fulfilled → remember the name so the Shopify auto-sync won't re-add it.
     this._registerFulfilledEventName(ev);
     if (this.activeEventId === id) this.activeEventId = null;
@@ -2155,6 +2189,23 @@ export class QueueEngine extends EventEmitter {
     e.nameOverridden = true;
     this._persist();
     this.emit('change', { reason: 'event-entry-rename', entryId: String(entryId) });
+    return true;
+  }
+
+  /** Manually override how many spots a seat holds (admin) — e.g. an event change
+   *  turned someone's 1 spot into 3. Flags the seat as manually adjusted (shown
+   *  admin-side only) so we can tell it wasn't the count the order came in with,
+   *  and remembers the original count for the note. Minimum 1 spot. */
+  setEventEntrySpots(entryId, spots) {
+    const e = this.eventEntries.get(String(entryId));
+    if (!e) return false;
+    const n = Math.max(1, Math.floor(Number(spots) || 0));
+    if (n === e.spots) return false;
+    if (e.originalSpots == null) e.originalSpots = e.spots; // capture pre-adjust count once
+    e.spots = n;
+    e.spotsAdjusted = true;
+    this._persist();
+    this.emit('change', { reason: 'event-entry-spots', entryId: String(entryId) });
     return true;
   }
 
@@ -2230,16 +2281,58 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
-  /** Boot backfill: give every existing open (Omega) quack its giveaway seat. */
+  /** Ensure an (Omega) quack carries its two auto house seats — Nikki and Greg —
+   *  pinned just BEFORE the giveaway (always the last two before it). The order of
+   *  the pair alternates with each new (Omega) quack via houseSeatToggle. Idempotent:
+   *  only adds the pair when the event has NO live house seat yet, so removing one
+   *  by hand won't make it reappear. Returns true if it added them. */
+  _ensureHouseSeats(ev) {
+    if (!this._isOmegaEvent(ev)) return false;
+    for (const e of this.eventEntries.values()) {
+      if (e.eventId === ev.id && e.houseSeat && e.status !== 'cancelled') return false;
+    }
+    // Pick the order for this event, then flip the toggle for the next one.
+    const flipped = (this.houseSeatToggle % 2) === 1;
+    const ordered = flipped ? [HOUSE_SEAT_NAMES[1], HOUSE_SEAT_NAMES[0]] : [HOUSE_SEAT_NAMES[0], HOUSE_SEAT_NAMES[1]];
+    const sortTs = [HOUSE_SEAT_SORT_FIRST, HOUSE_SEAT_SORT_SECOND];
+    ordered.forEach((name, i) => {
+      const uniq = Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + i;
+      const entryId = `evt:${ev.id}:house:${uniq}`;
+      this.eventEntries.set(entryId, {
+        id: entryId,
+        eventId: ev.id,
+        orderId: '',
+        orderName: '',
+        buyerId: `house:${entryId}`,
+        buyer: name,
+        nameOverridden: true,
+        itemName: ev.title,
+        spots: 1,
+        total: 0,
+        source: 'House',
+        createdAt: sortTs[i], // pins just before the giveaway, in this order
+        receivedAt: Date.now(),
+        status: 'queued',
+        manual: true,
+        houseSeat: true,
+      });
+    });
+    this.houseSeatToggle = (this.houseSeatToggle + 1) % 1000000;
+    return true;
+  }
+
+  /** Boot backfill: give every existing open (Omega) quack its giveaway + house seats. */
   _backfillGiveawaySeats() {
     try {
       let added = 0;
       for (const ev of (this.events || [])) {
-        if (ev.status !== 'ripped' && this._ensureGiveawaySeat(ev)) added++;
+        if (ev.status === 'ripped') continue;
+        if (this._ensureGiveawaySeat(ev)) added++;
+        if (this._ensureHouseSeats(ev)) added++;
       }
       if (added) this._persist();
     } catch (e) {
-      console.warn('[queue] giveaway backfill failed:', e.message);
+      console.warn('[queue] giveaway/house backfill failed:', e.message);
     }
   }
 
@@ -2280,13 +2373,16 @@ export class QueueEngine extends EventEmitter {
         buyer: e.nameOverridden ? e.buyer : this._displayName(e.buyerId, e.buyer),
         buyerId: e.buyerId,
         spots: e.spots,
+        spotsAdjusted: !!e.spotsAdjusted,                 // admin manually changed the spot count
+        originalSpots: (e.originalSpots != null ? e.originalSpots : null),
         itemName: e.itemName,
         manual: !!e.manual,
         source: e.source || '',
         orderId: e.orderId,
         orderName: e.orderName || '',
-        createdAt: e.createdAt === GIVEAWAY_SORT_TS ? null : e.createdAt,
+        createdAt: (e.createdAt >= HOUSE_SEAT_SORT_FIRST) ? null : e.createdAt,
         giveaway: !!e.giveaway,
+        houseSeat: !!e.houseSeat,
         fulfilled: e.status === 'fulfilled',
         fulfilledAt: e.fulfilledAt || null,
         // Oversold if any of this entry's spots land beyond the cap.
@@ -2325,7 +2421,7 @@ export class QueueEngine extends EventEmitter {
         soldOut: q.soldOut, oversold: q.oversold, oversoldSpots: q.oversoldSpots,
         entryCount: q.entryCount,
         unfulfilledCount: q.unfulfilledCount, spotsUnfulfilled: q.spotsUnfulfilled,
-        status: ev.status,
+        status: ev.status, rippedAt: ev.rippedAt || null,
         active: this.activeEventId === ev.id, keywords: ev.keywords,
         // Full ordered side-queue (admin panel consumes this; overlay uses
         // activeEvent instead, so this stays admin-only).

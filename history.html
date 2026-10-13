@@ -27,6 +27,8 @@
   .dl{background:var(--done);border-color:var(--done);color:#04180d}
   .empty{color:var(--muted);text-align:center;padding:48px 20px;border:1px dashed var(--line);border-radius:12px}
   .num{font-variant-numeric:tabular-nums}
+  .oldtoggle{width:100%;text-align:left;margin:6px 0 10px;background:var(--panel2);
+    border:1px solid var(--line);color:var(--muted);font-weight:700}
 </style>
 </head>
 <body>
@@ -40,6 +42,13 @@
 </main>
 <script>
   function money(n){return '$'+Number(n||0).toFixed(2);}
+  function toggleOlder(){
+    const list=document.getElementById('olderlist'), btn=document.getElementById('oldtoggle');
+    if(!list) return;
+    const open = list.style.display!=='none';
+    list.style.display = open?'none':'';
+    if(btn) btn.textContent = (open?'▸':'▾')+' Older days ('+list.children.length+')';
+  }
   function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
   async function load(){
     const el = document.getElementById('list');
@@ -51,7 +60,7 @@
         el.innerHTML = '<div class="empty">No past days yet.<br><br>Fulfilled orders are archived here automatically at 12:00 AM PST each day.</div>';
         return;
       }
-      el.innerHTML = history.map(s=>{
+      const rowHtml = s=>{
         const when = s.label || new Date(s.endedAt).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
         return `<div class="row">
           <div>
@@ -61,7 +70,17 @@
           <div class="spacer"></div>
           <a href="/api/export/${encodeURIComponent(s.id)}" style="text-decoration:none"><button class="dl">⬇ Export CSV</button></a>
         </div>`;
-      }).join('');
+      };
+      // Show the most recent 5 days expanded; fold anything older into a
+      // collapsed "Older days" section.
+      const recent = history.slice(0,5);
+      const older = history.slice(5);
+      let html = recent.map(rowHtml).join('');
+      if(older.length){
+        html += `<button class="oldtoggle" id="oldtoggle" onclick="toggleOlder()">▸ Older days (${older.length})</button>
+          <div id="olderlist" style="display:none">${older.map(rowHtml).join('')}</div>`;
+      }
+      el.innerHTML = html;
     } catch(e){
       el.innerHTML = '<div class="empty">Could not load history. Try refreshing.</div>';
     }

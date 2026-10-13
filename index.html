@@ -389,6 +389,9 @@
   .eqrow .eqedit{background:transparent;border:1px solid transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px}
   .eqrow .eqedit:hover{color:var(--text);border-color:#3a3f4b}
   .eqrow .eqmanual{color:#8fb7ff;font-size:11px;font-weight:800;flex:none}
+  .eqrow .eqadj{color:#ffbe6b;font-size:10px;font-weight:800;flex:none;letter-spacing:.3px;background:#3a2a0c;border:1px solid #7a5a16;border-radius:20px;padding:1px 7px;cursor:help}
+  .eqrow .eqspedit{background:transparent;border:1px solid transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px}
+  .eqrow .eqspedit:hover{color:var(--pri);border-color:#3a3f4b}
   .eqrow .eqgift{color:#ffc879;font-size:10px;font-weight:800;flex:none;letter-spacing:.3px;background:#3a2a0c;border:1px solid #6a5010;border-radius:20px;padding:1px 7px}
   .eqadd{margin-top:6px;background:#161a22;border:1px dashed #3a3f4b;color:#a7b0c2;cursor:pointer;font-size:12px;font-weight:700;padding:6px 10px;border-radius:8px;width:100%}
   .eqadd:hover{color:var(--text);border-color:#4a92ff}
@@ -1086,7 +1089,7 @@
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
       + `<button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('${e.key}')">🏷 Label</button>`
-      + `<button class="labelb packb" title="Print 4×6 packing slip — full name, shipping address, contents" onclick="printPacking('queue','${e.key}')">📦 Packing</button>`
+      + `<button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('queue','${e.key}')">📦 Packing</button>`
       + `<div class="money">${money(e.total)}</div>`
       + `<div class="actions">${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
       + `<button class="holdb" title="Put on hold — moves it to the On-hold sidebar until you're ready" onclick="holdOrder('${e.key}')">⏸ Hold</button>`
@@ -1455,34 +1458,29 @@
     updateSectionOrderBtn();
   }
 
-  // --- 4x6 packing / shipping label (#2) ---
-  // Full name + shipping address + order contents, for pulling, packing & shipping.
-  // Works from a Rip-Live slot (scope 'queue') or a Ship-Sealed order (scope 'sealed').
-  async function printPacking(scope, key){
-    let orderId='', fallbackName='';
+  // --- 4x6 packing slip (#2) ---
+  // Masked name (first + 2 of last) + order contents, for pulling & packing.
+  // No customer address or phone. Works from a Rip-Live slot (scope 'queue') or a
+  // Ship-Sealed order (scope 'sealed').
+  function printPacking(scope, key){
+    // Packing slip no longer prints the customer's shipping address or phone, and
+    // the name is shown masked (first name + first 2 letters of last name) — the
+    // same label used in the queue. Everything comes from the slot entry, so this
+    // no longer needs the on-demand shipping lookup at all.
+    let name='', orderNo='', items=[];
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
-      orderId=s.id; fallbackName=s.buyer||'';
+      name=s.buyer||''; orderNo=s.orderName||('#'+shortId(s.id)); items=s.items||[];
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
-      orderId=(e.orderIds||[])[0]; fallbackName=e.buyer||'';
+      name=e.buyer||'';
+      orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
+      items=e.items||[];
     }
-    if(!orderId){ alert('No order id to look up a shipping address for.'); return; }
-    let data=null;
-    try{ data=await (await fetch('/api/order-shipping/'+encodeURIComponent(orderId),{headers:{accept:'application/json'}})).json(); }catch(e){}
-    if(!data || !data.ok){ alert("Couldn't load the shipping address"+(data&&data.error?(': '+data.error):'')+".\n\nThis can happen for a TikTok-synced order without an address on file, or if address access isn't granted in Shopify."); return; }
-    const name=data.fullName||fallbackName||'';
-    const orderNo=data.orderName||('#'+shortId(orderId));
-    const items=data.items||[];
-    const ship=data.shipping;
     const totalQty=(items||[]).reduce((n,i)=>n+(Number(i.qty)||1),0);
     const itemRows=(items&&items.length)
       ? items.map(i=>`<div class="pk-item"><span class="pk-q">${Number(i.qty)||1}</span><span class="pk-n">${esc(i.name)}</span></div>`).join('')
       : `<div class="pk-item"><span class="pk-n pk-empty">No physical items on this order.</span></div>`;
-    const addr = ship
-      ? [esc(ship.name||name), esc(ship.address1), esc(ship.address2), esc(ship.cityStateZip), esc(ship.country)].filter(Boolean).join('<br>')
-      : '<i>No shipping address on file — check Shopify.</i>';
-    const phone = (ship && ship.phone) ? `<div class="pk-phone">Tel ${esc(ship.phone)}</div>` : '';
     const printedOn = new Date().toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
     // Thermal-safe: black text + black rules only. No background fills (they drop
     // out unless "background graphics" is on), no emoji, no faint grays.
@@ -1499,8 +1497,6 @@
         display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #000;padding-bottom:2px}
       .pk-count{font-size:8.5pt;font-weight:800}
       .pk-name{font-size:16pt;font-weight:800;line-height:1.12}
-      .pk-addr{font-size:12pt;line-height:1.42;margin-top:3px}
-      .pk-phone{font-size:10.5pt;margin-top:3px}
       .pk-items{margin-top:2px;flex:1}
       .pk-item{display:flex;gap:9px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #000}
       .pk-item:last-child{border-bottom:none}
@@ -1512,10 +1508,8 @@
     </style></head><body>
       <div class="pk-brand">iPokeTCG</div>
       <div class="pk-hdr"><span class="t">PACKING SLIP</span><span class="o">${esc(orderNo)}</span></div>
-      <div class="pk-lbl"><span>Ship to</span></div>
+      <div class="pk-lbl"><span>Order for</span></div>
       <div class="pk-name">${esc(name)||'—'}</div>
-      <div class="pk-addr">${addr}</div>
-      ${phone}
       <div class="pk-lbl"><span>Order contents</span><span class="pk-count">${totalQty} item${totalQty===1?'':'s'}</span></div>
       <div class="pk-items">${itemRows}</div>
       <div class="pk-thanks">Thank you for your order!</div>
@@ -1552,7 +1546,7 @@
         <div class="pos">${s.position}</div>
         <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
           <div class="items">${esc(itemStr)}</div></div>
-        <button class="labelb packb" title="Print 4×6 packing slip — full name, shipping address, contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
+        <button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
         <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
         <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
       </div>`;
@@ -1643,13 +1637,14 @@
     const fEl = document.getElementById('fulfilled');
     const f = state.fulfilled||[];
     document.getElementById('f-count').textContent = f.length ? '('+f.length+')' : '';
-    const fSig = JSON.stringify(f.map(s=>[s.key,s.buyer,s.itemCount,s.total,(s.orderNames||[]).join(','),(s.orderIds||[]).join(',')]));
+    const fSig = JSON.stringify(f.map(s=>[s.key,s.buyer,s.itemCount,s.total,s.fulfilledAt,(s.orderNames||[]).join(','),(s.orderIds||[]).join(',')]));
     if(fSig !== fulfilledSig){
       fulfilledSig = fSig;
       fEl.innerHTML = f.length ? f.map(s=>`<div class="done-row">
           <span class="ordno">${orderNoList(s).map(n=>esc(n)).join(' ')}</span>
           <span class="name">${esc(s.buyer)}</span>
           <span>${s.itemCount} item${s.itemCount===1?'':'s'}</span>
+          <span style="color:#748099;font-size:11px;white-space:nowrap" title="Marked fulfilled (PST)">🕒 ${esc(fmtPST(s.fulfilledAt))}</span>
           <span style="margin-left:auto">${money(s.total)}</span>
           <button class="undob" title="Move this order back into the queue" onclick="reopenOrder('${s.key}')">↩ Undo</button>
         </div>`).join('') : '<div class="empty">Nothing fulfilled yet today.</div>';
@@ -1903,6 +1898,17 @@
     try{ await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/fulfill', { on: on }); }
     catch{ alert("Couldn't update that spot — check your connection and try again."); }
   }
+  // Manually adjust how many spots a seat holds (e.g. an event change turned
+  // someone's 1 spot into 3). Flags the seat as manually adjusted on the admin side.
+  async function adjustEventEntrySpotsUI(entryId, current){
+    const raw = window.prompt('How many spots should this seat have?\n(This marks the seat as manually adjusted.)', String(current||1));
+    if(raw===null) return; // cancelled
+    const n = Math.floor(Number(raw));
+    if(!Number.isFinite(n) || n < 1){ alert('Enter a whole number of 1 or more.'); return; }
+    if(n === Number(current)) return; // no change
+    try{ await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/spots', { spots: n }); }
+    catch{ alert("Couldn't adjust that seat — check your connection and try again."); }
+  }
   // ── Add / rename event seat (#4, #5) ──
   let seatMode='add', seatEventId=null, seatEntryId=null;
   function closeSeat(){ document.getElementById('seatModal').classList.remove('open'); }
@@ -1975,8 +1981,11 @@
           ${en.createdAt?`<span class="eqtime" title="Order received (PST)">🕒 ${esc(fmtPST(en.createdAt))}</span>`:''}
           <span class="eqord">${esc(en.orderName || (en.orderId?('#'+shortId(en.orderId)):''))}</span>
           ${en.spots>1?`<span class="eqsp">×${en.spots}</span>`:''}
+          ${en.spotsAdjusted?`<span class="eqadj" title="Spots manually adjusted by admin${en.originalSpots!=null?(' (was '+en.originalSpots+', now '+en.spots+')'):''} — check this was intended">⚠ ADJ</span>`:''}
           ${en.source?`<span class="srcbadge ${esc(srcShort(en.source))}">${esc(srcShort(en.source))}</span>`:''}
+          ${en.fulfilled&&en.fulfilledAt?`<span class="eqtime" title="Spot marked completed (PST)">✓ ${esc(fmtPST(en.fulfilledAt))}</span>`:''}
           <button class="eqdone${en.fulfilled?' on':''}" title="${en.fulfilled?'Undo — mark not fulfilled':'Mark this spot fulfilled'}" onclick="fulfillEventEntryUI('${en.id}',${en.fulfilled?'false':'true'})">${en.fulfilled?'✓ Done':'Fulfill'}</button>
+          <button class="eqspedit" title="Adjust how many spots this seat has" onclick="adjustEventEntrySpotsUI('${en.id}',${Number(en.spots)||1})">±</button>
           <button class="eqedit" title="Rename this seat" onclick="openRenameSeat('${en.id}')">✎</button>
           <button class="eqx" title="Remove this spot" onclick="removeEventEntryUI('${en.id}')">✕</button>
         </div>`).join('') : '<div class="eqrow" style="color:#748099">No spots yet.</div>';
@@ -1987,7 +1996,7 @@
           <span class="ename">${esc(e.title)}</span>
           ${e.oversold?`<span class="oversoldtag" title="More spots ordered than this event's limit">⚠ OVERSOLD +${e.oversoldSpots}</span>`:''}
           ${e.active?'<span class="eactive">● ON OVERLAY</span>':''}
-          ${ripped?'<span class="estat">(ripped)</span>':''}
+          ${ripped?`<span class="estat" title="Event marked fulfilled (PST)">(ripped${e.rippedAt?' '+esc(fmtPST(e.rippedAt)):''})</span>`:''}
           <div class="ebtns">
             <button class="elabels" title="Print a label for everyone in this event's queue" onclick="printEventLabels('${e.id}')">🖨 Labels</button>
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
