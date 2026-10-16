@@ -331,17 +331,13 @@ export class QueueEngine extends EventEmitter {
         this.overlays.queue.opacity = Math.max(0, Math.min(1, envOp));
       }
     } catch (e) { console.warn('[queue] COMBINE_MODE seed failed:', e.message); }
-    // Un-combine on restart: when auto-combine is off, no slot should carry more
-    // than one order across a reboot. Split any that were merged before, so the
-    // board comes back up with every order in its own slot (admins re-combine by
-    // hand as needed). Runs silently on boot — no 'change' listeners are attached
-    // yet, and _persist below captures the result.
-    try {
-      if (this.combineMode === 'off') {
-        const n = this._splitCombinedSlots();
-        if (n) console.log(`[queue] un-combined ${n} order(s) on boot (combine mode off)`);
-      }
-    } catch (e) { console.warn('[queue] boot un-combine failed:', e.message); }
+    // NOTE: we deliberately do NOT un-combine slots on boot. In 'off' mode the
+    // ONLY way two orders share a batchKey is a deliberate MANUAL combine (ingest
+    // always opens a fresh slot when auto-combine is off), so splitting shared
+    // slots on restart would silently undo the admin's manual combines — exactly
+    // what used to happen on every redeploy. Manual combines persist via batchKey
+    // and must survive restarts. (Switching the mode TO 'off' at runtime still
+    // splits existing merges, via setCombineMode — that's an explicit admin action.)
     // Clear stale TikTok auto-holds on boot. TikTok orders sync into Shopify as
     // ON_HOLD by default, which we no longer treat as a real hold — but orders
     // ingested before that change kept the flag. The onHold boolean is only ever
