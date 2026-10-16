@@ -370,6 +370,8 @@ app.post('/api/events/:id/active', requireAuth, (req, res) => {
   res.json({ ok: true, activeEventId: queue.setActiveEvent(on ? req.params.id : null) });
 });
 app.post('/api/events/:id/rip', requireAuth, (req, res) => res.json({ ok: queue.ripEvent(req.params.id) }));
+// Set/clear an event's admin win-note (who won / what they won) → { note }.
+app.post('/api/events/:id/note', requireAuth, (req, res) => res.json({ ok: queue.setEventNote(req.params.id, (req.body && req.body.note) || '') }));
 // Reposition an event within the list → { dir: 'up' | 'down' }.
 app.post('/api/events/:id/move', requireAuth, (req, res) => {
   const dir = (req.body && req.body.dir) === 'up' ? 'up' : 'down';
@@ -423,6 +425,10 @@ app.post('/api/sealed/:id/fulfill', requireAuth, (req, res) => {
 });
 // Remove a sealed order from the queue (cancelled/refunded).
 app.post('/api/sealed/:id/remove', requireAuth, (req, res) => res.json({ ok: queue.removeSealedOrder(req.params.id) }));
+// Move one line item out of a sealed order into the Rip-Live queue → { itemIndex }.
+app.post('/api/sealed/:id/move-to-live', requireAuth, (req, res) => {
+  res.json({ ok: queue.moveSealedItemToLive(req.params.id, (req.body && req.body.itemIndex)) });
+});
 // On-demand packing-label data (full name + shipping address + items) for one
 // order. Isolated from the poller so an address-permission issue can't halt ingest.
 app.get('/api/order-shipping/:id', requireAuth, async (req, res) => {

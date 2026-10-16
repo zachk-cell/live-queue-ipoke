@@ -1564,6 +1564,55 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Move a single line item OUT of a Ship-Sealed order and INTO the Rip-Live queue
+   *  (buyer changed their mind and wants it ripped live). Creates its own standalone
+   *  Rip-Live slot and removes that item from the sealed order; if the sealed order
+   *  has no items left it drops off the Ship-Sealed queue. */
+  moveSealedItemToLive(sealedId, itemIndex) {
+    const o = this.sealedOrders.get(String(sealedId));
+    if (!o || o.status !== 'queued') return false;
+    const items = o.items || [];
+    const idx = Number(itemIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) return false;
+    const item = items[idx];
+    const buyerId = String(o.buyerId);
+    // Unique id so it never collides with an existing main order of the same order id
+    // (an order can have both a Rip-Live and a Ship-Sealed part sharing one id).
+    const liveId = `${o.id}~rip${++this.batchCounter}`;
+    const batchKey = `${buyerId}#${++this.batchCounter}`;
+    const order = {
+      id: liveId,
+      buyerId,
+      buyer: o.buyer || 'Buyer',
+      buyerHandle: o.buyerHandle || '',
+      items: [item],
+      total: 0, // placement move only — the order's $ was already captured on the sealed order
+      createdAt: Date.now(),
+      receivedAt: Date.now(),
+      status: 'queued',
+      batchKey,
+      hasPriority: this._isPriorityOrder([item]),
+      mergedWhileTop: false,
+      onHold: false,
+      source: o.source || '',
+      orderName: o.orderName || '',
+      fullName: o.fullName || '',
+      shipping: o.shipping || null,
+      afterTopOf: null,
+      movedFromSealed: true, // provenance flag (admin can see it came from Ship-Sealed)
+    };
+    this.orders.set(liveId, order);
+    // Remove the item from the sealed order; drop the sealed slot if nothing's left.
+    items.splice(idx, 1);
+    if (!items.length) { o.status = 'moved'; o.movedAt = Date.now(); }
+    this._markTopReached();
+    this._persist();
+    const entry = this._entryFor(batchKey);
+    this.emit('change', { reason: 'sealed-to-live', sealedId: String(sealedId), orderId: liveId, entry });
+    this.emit('new-slot', entry);
+    return true;
+  }
+
   /** Cancelled slots (grouped by buyer batch) for the admin Cancelled section. */
   cancelledSlots() {
     const byBatch = new Map();
@@ -1979,6 +2028,19 @@ export class QueueEngine extends EventEmitter {
     return ev;
   }
 
+  /** Set (or clear) an event's admin win-note — e.g. who won and what they won.
+   *  Stored on the event and carried into Past Events when archived. */
+  setEventNote(eventId, note) {
+    const ev = this.events.find((e) => e.id === eventId);
+    if (!ev) return false;
+    const n = String(note == null ? '' : note).trim();
+    ev.note = n;
+    ev.noteAt = n ? Date.now() : null;
+    this._persist();
+    this.emit('change', { reason: 'event-note', eventId });
+    return true;
+  }
+
   /** Re-scan queued main-queue orders and pull any items that now match an OPEN
    *  event into that event's side-queue. Event routing otherwise only happens at
    *  the moment an order is ingested, which strands orders that were already on
@@ -2103,6 +2165,8 @@ export class QueueEngine extends EventEmitter {
       startedAt,
       createdAt: ev.createdAt || null,
       rippedAt: ev.rippedAt || null, // when the event was marked fulfilled (ripped)
+      note: ev.note || '', // admin win-note: who won / what they won
+      noteAt: ev.noteAt || null,
       archivedAt: Date.now(),
       entries,
     };
@@ -2422,6 +2486,7 @@ export class QueueEngine extends EventEmitter {
         entryCount: q.entryCount,
         unfulfilledCount: q.unfulfilledCount, spotsUnfulfilled: q.spotsUnfulfilled,
         status: ev.status, rippedAt: ev.rippedAt || null,
+        note: ev.note || '', noteAt: ev.noteAt || null,
         active: this.activeEventId === ev.id, keywords: ev.keywords,
         // Full ordered side-queue (admin panel consumes this; overlay uses
         // activeEvent instead, so this stays admin-only).

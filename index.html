@@ -240,9 +240,23 @@
   .xqbub.xq-e{background:#123a2a;color:#57e0a6;border:1px solid #1c5133}
   .xqbub.xq-s{background:#3a2a0c;color:#ffc879;border:1px solid #6a5010}
   /* (#8) Ship-Sealed queue rows */
-  .sealrow{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+  .sealrow{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+  .sealrow .sealmain{display:flex;align-items:center;gap:12px;padding:10px 14px}
   .sealrow .who{flex:1;min-width:0}
   .sealrow .items{color:var(--muted);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Inline expand: full item list revealed under a sealed row, each with a "Rip Live" move button */
+  .sealcaret{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;
+    padding:6px 9px;font-size:12px;line-height:1;flex:none;cursor:pointer;transition:transform .12s,color .12s,border-color .12s}
+  .sealcaret:hover{color:var(--text);border-color:var(--accent)}
+  .sealrow.expanded .sealcaret{transform:rotate(90deg);color:var(--accent);border-color:var(--accent)}
+  .sealdetails{display:none;border-top:1px dashed var(--line);padding:8px 16px 10px 50px}
+  .sealrow.expanded .sealdetails{display:block}
+  .sealdetails .di{display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)}
+  .sealdetails .di:last-child{border-bottom:none}
+  .sealdetails .diq{color:var(--muted);font-variant-numeric:tabular-nums;min-width:34px;font-weight:700}
+  .sealdetails .din{flex:1;min-width:0}
+  .sealtolive{background:#3a2c0c;border:1px solid #6a5010;color:var(--pri);cursor:pointer;font-size:11px;font-weight:700;padding:3px 9px;border-radius:7px;white-space:nowrap;flex:none}
+  .sealtolive:hover{filter:brightness(1.15)}
   /* Compact order time + live in-queue timer, pushed to the right of the name line
      so the row height is unchanged. */
   .sealrow .name .sealmeta{margin-left:auto;display:inline-flex;align-items:center;gap:6px;
@@ -370,6 +384,11 @@
   .ebtns .emove:hover{color:var(--text);border-color:#4a92ff}
   .ebtns .elabels{background:transparent;color:#cdd4e4;border:1px solid var(--line)}
   .ebtns .elabels:hover{border-color:#4a92ff;color:var(--text)}
+  .ebtns .enote{background:transparent;color:#c8a6ff;border:1px solid #4a3a6b}
+  .ebtns .enote.on{background:#241a3a;color:#d9c2ff;border-color:#6b52a8}
+  .ebtns .enote:hover{filter:brightness(1.15)}
+  .enotebox{margin-top:6px;background:#241a3a;border:1px solid #4a3a6b;color:#e5d8ff;border-radius:8px;
+    padding:7px 10px;font-size:12.5px;line-height:1.4;white-space:pre-wrap;word-break:break-word}
   .ekw{color:#748099;font-size:11.5px;margin-top:5px}
   .espots-wrap{margin-top:7px}
   .espots-meter{height:7px;border-radius:5px;background:#1d212b;overflow:hidden;margin-top:4px}
@@ -1542,13 +1561,18 @@
       const pri=s.isPriority?'<span class="badge pri">PRIORITY</span>':'';
       const src=s.source?`<span class="srcbadge ${esc(srcShort(s.source))}">${esc(srcShort(s.source))}</span>`:'';
       const ord=esc(s.orderName||(s.id?('#'+shortId(s.id)):''));
-      return `<div class="sealrow">
-        <div class="pos">${s.position}</div>
-        <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
-          <div class="items">${esc(itemStr)}</div></div>
-        <button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
-        <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
-        <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
+      const detItems=(s.items||[]).map((it,idx)=>`<div class="di"><span class="diq">${it.qty}×</span><span class="din">${esc(it.name)}</span><button class="sealtolive" title="Move this item up to the Rip-Live queue (buyer wants it ripped live)" onclick="sealMoveToLiveUI('${s.id}',${idx})">↑ Rip Live</button></div>`).join('') || '<div class="di" style="color:#748099">No items.</div>';
+      return `<div class="sealrow${sealExpanded.has(s.id)?' expanded':''}" data-sid="${esc(s.id)}">
+        <div class="sealmain">
+          <div class="pos">${s.position}</div>
+          <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
+            <div class="items">${esc(itemStr)}</div></div>
+          <button class="sealcaret" title="Show/hide this order's items (move an item to Rip-Live)" onclick="toggleSealExpand('${s.id}')">▸</button>
+          <button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
+          <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
+          <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
+        </div>
+        <div class="sealdetails">${detItems}</div>
       </div>`;
     }).join('');
     tickTimers(); // fill the in-queue timers immediately on (re)render
@@ -1579,6 +1603,24 @@
   async function sealedRemove(id){
     const ok=await uiConfirm({title:'Remove this sealed order?',body:'Removes it from the Ship-Sealed queue (e.g. the order was cancelled or refunded).',confirmText:'Remove',danger:true});
     if(ok) await postJSON('/api/sealed/'+encodeURIComponent(id)+'/remove',{});
+  }
+  // Which sealed rows are expanded to show their items. Visual-only; re-applied on
+  // render from this set so it survives live updates.
+  const sealExpanded = new Set();
+  function toggleSealExpand(id){
+    const on = !sealExpanded.has(id);
+    if(on) sealExpanded.add(id); else sealExpanded.delete(id);
+    const el=document.getElementById('sealed');
+    if(el) for(const n of el.children){ if(n.dataset && n.dataset.sid===String(id)){ n.classList.toggle('expanded',on); break; } }
+  }
+  // Move one line item out of a sealed order and into the live Rip-Live queue.
+  async function sealMoveToLiveUI(id, idx){
+    const ok=await uiConfirm({title:'Move to Rip-Live?',
+      body:'Moves this item out of the Ship-Sealed queue and into the live Rip-Live queue as its own spot (for when the buyer wants it ripped live instead of shipped sealed).',
+      confirmText:'Move to Rip-Live'});
+    if(!ok) return;
+    try{ await postJSON('/api/sealed/'+encodeURIComponent(id)+'/move-to-live',{itemIndex:idx}); }
+    catch{ alert("Couldn't move that item — check your connection and try again."); }
   }
 
   function render(){
@@ -1862,6 +1904,16 @@
     closeSync();
   }
   async function toggleEventActive(id, on){ await postJSON('/api/events/'+encodeURIComponent(id)+'/active',{active:on}); }
+  // Win note: track who won the event and what they won. Archives with the event.
+  async function editEventNote(id){
+    const ev=(state.events||[]).find(e=>e.id===id);
+    const cur=(ev&&ev.note)||'';
+    const next=window.prompt('Win note for "'+((ev&&ev.title)||'event')+'"\n(e.g. who won and what they won — saved to Past Events when archived):', cur);
+    if(next===null) return; // cancelled
+    if(next===cur) return;  // unchanged
+    try{ await postJSON('/api/events/'+encodeURIComponent(id)+'/note',{note:next}); }
+    catch{ alert("Couldn't save the note — check your connection and try again."); }
+  }
   async function ripEventUI(id){
     const ev=(state.events||[]).find(e=>e.id===id);
     const ok = await uiConfirm({title:'Mark "'+((ev&&ev.title)||'event')+'" fulfilled?',
@@ -1960,7 +2012,7 @@
     const evs = state.events||[];
     const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,
       e.unfulfilledCount,e.entryCount,
-      (e.keywords||[]).join(','), expandedEvents.has(e.id)?1:0,
+      (e.keywords||[]).join(','), (e.note||''), expandedEvents.has(e.id)?1:0,
       expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
     if(!force && box._sig===sig) return;
     box._sig = sig;
@@ -2001,6 +2053,7 @@
             <button class="elabels" title="Print a label for everyone in this event's queue" onclick="printEventLabels('${e.id}')">🖨 Labels</button>
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
+            <button class="enote ${e.note?'on':''}" onclick="editEventNote('${e.id}')" title="Add/edit a win note — who won and what they won. Saved to Past Events when archived.">📝 ${e.note?'Note ✓':'Note'}</button>
             <button class="eedit" onclick="editEvent('${e.id}')">Edit</button>
             ${ripped
               ? `<button class="earch" onclick="archiveEventUI('${e.id}')" title="Save this event and its roster to Past Events, then clear it off the board">✓ Remove &amp; Archive</button>`
@@ -2012,6 +2065,7 @@
           ${e.totalSpots>0?`<div class="espots-meter"><i style="width:${pct}%${e.oversold?';background:linear-gradient(90deg,#ff5d5d,#ff9a5d)':''}"></i></div>`:''}
         </div>
         ${e.description?`<div class="ekw">${esc(e.description)}</div>`:''}
+        ${e.note?`<div class="enotebox" title="Win note — archives with the event">📝 ${esc(e.note)}</div>`:''}
         <div class="ekw">🔑 ${(e.keywords||[]).map(esc).join(', ')||'<i>no keywords</i>'}</div>
         <button class="eexpand" onclick="toggleEventQueue('${e.id}')">${expandedEvents.has(e.id)?'▾ Hide':'▸ Show'} side-queue (${(e.unfulfilledCount!=null && e.unfulfilledCount!==e.entryCount)?`${e.unfulfilledCount} left of ${e.entryCount}`:e.entryCount})</button>
         <div class="equeue">${eq}<button class="eqadd" onclick="openAddSeat('${e.id}')">＋ Add seat</button></div>
