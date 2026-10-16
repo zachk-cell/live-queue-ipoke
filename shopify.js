@@ -507,7 +507,11 @@ function _inferEventType(title) {
   return /\bwta\b|winner[\s-]?takes?[\s-]?all/i.test(String(title || '')) ? 'wta' : 'quack';
 }
 
-// Pull the event product(s) and enumerate their variants with on_hand totals.
+// Pull the event product(s) and enumerate their variants with their SELLABLE
+// ("available") seat count. We use Shopify's "available" (= on_hand minus units
+// already committed to unfulfilled orders) rather than "on_hand", so a quack that
+// has already sold some units generates with the number still buyable — e.g. a
+// product with 22 on hand but 7 committed shows 15 spots, matching the storefront.
 async function fetchEventVariants() {
   const data = await gql(
     `query($q: String!) {
@@ -519,7 +523,7 @@ async function fetchEventVariants() {
                id title
                inventoryItem {
                  id tracked
-                 inventoryLevels(first: 20) { nodes { quantities(names: ["on_hand"]) { name quantity } } }
+                 inventoryLevels(first: 20) { nodes { quantities(names: ["available"]) { name quantity } } }
                }
              }
            }
@@ -535,23 +539,23 @@ async function fetchEventVariants() {
     if (!String(p.title || '').toLowerCase().includes(EVENT_TITLE_MATCH)) continue;
     if (p.status && p.status !== 'ACTIVE') continue;
     for (const v of ((p.variants && p.variants.nodes) || [])) {
-      let onHand = null;
+      let available = null;
       const inv = v.inventoryItem;
       if (inv && inv.tracked) {
         let sum = 0, seen = false;
         for (const lvl of ((inv.inventoryLevels && inv.inventoryLevels.nodes) || [])) {
           for (const q of (lvl.quantities || [])) {
-            if (q && q.name === 'on_hand') { sum += Number(q.quantity) || 0; seen = true; }
+            if (q && q.name === 'available') { sum += Number(q.quantity) || 0; seen = true; }
           }
         }
-        if (seen) onHand = sum;
+        if (seen) available = sum;
       }
       out.push({
         productId: numericId(p.id),
         productTitle: p.title,
         variantId: numericId(v.id),
         variantTitle: (v.title || '').trim(),
-        onHand, // null when the variant isn't inventory-tracked → seats left blank
+        available, // sellable count; null when the variant isn't inventory-tracked → seats left blank
       });
     }
   }
@@ -599,7 +603,7 @@ export async function eventSyncCandidates(queue) {
         title: v.variantTitle,
         type: _inferEventType(v.variantTitle),
         keyword: v.variantTitle,
-        onHand: v.onHand,
+        available: v.available,
         fulfilledAt: (rec && rec.at) || null,
       });
       continue;
@@ -611,7 +615,7 @@ export async function eventSyncCandidates(queue) {
       title: v.variantTitle,
       type: _inferEventType(v.variantTitle),
       keyword: v.variantTitle,
-      onHand: v.onHand,
+      available: v.available,
     });
   }
   return { ok: true, scannedVariants: variants.length, alreadyLinked, candidates, retired };
@@ -633,16 +637,40 @@ export async function autoSyncEvents(queue) {
         type: c.type || 'quack',
         title: c.title,
         description: '',
-        totalSpots: (c.onHand != null ? c.onHand : 0),
+        totalSpots: (c.available != null ? c.available : 0),
         keywords: [c.keyword],
         sourceVariantId: c.variantId,
         sourceProductId: c.productId,
       });
       if (queue.events.length > before) {
         added++;
-        console.log(`[shopify] auto-synced new event: ${c.title} (seats ${c.onHand != null ? c.onHand : 'untracked'})`);
+        console.log(`[shopify] auto-synced new event: ${c.title} (seats ${c.available != null ? c.available : 'untracked'})`);
       }
     }
+    // Back-fill seats for an event that was synced BEFORE its inventory was set:
+    // when the seller adds the available spots a few minutes later, pick the number
+    // up automatically. This is a ONE-TIME fill — only when the event still has 0
+    // spots and Shopify now reports a positive available count. We deliberately do
+    // NOT continuously track "available" (it shrinks as queue orders commit stock,
+    // which would wrongly reduce the event's total as it fills).
+    try {
+      const variants = await fetchEventVariants();
+      for (const v of variants) {
+        if (v.available == null || v.available <= 0) continue;
+        const cv = _canonKw(v.variantTitle || '');
+        if (!cv) continue;
+        const ev = (queue.events || []).find((e) =>
+          e.status !== 'ripped' && (Number(e.totalSpots) || 0) <= 0 && (
+            (e.sourceVariantId && String(e.sourceVariantId) === String(v.variantId)) ||
+            _canonKw(e.title || '') === cv ||
+            (e.keywords || []).some((k) => { const ck = _canonKw(k); return ck && cv.includes(ck); })
+          ));
+        if (ev) {
+          queue.updateEvent(ev.id, { totalSpots: v.available });
+          console.log(`[shopify] auto-filled seats for "${ev.title}": ${v.available} (set after first sync)`);
+        }
+      }
+    } catch (e) { /* swallow — spot back-fill must never disturb the poller */ }
   } catch (e) {
     const msg = String(e && e.message || e);
     if (msg !== _lastAutoSyncWarn) { console.warn('[shopify] event auto-sync skipped:', msg); _lastAutoSyncWarn = msg; }

@@ -2037,6 +2037,19 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Set (or clear) an event's internal "Event Note" — e.g. which specific items
+   *  are being used for the event. Separate from the win-note; also archived. */
+  setEventItemsNote(eventId, note) {
+    const ev = this.events.find((e) => e.id === eventId);
+    if (!ev) return false;
+    const n = String(note == null ? '' : note).trim();
+    ev.eventNote = n;
+    ev.eventNoteAt = n ? Date.now() : null;
+    this._persist();
+    this.emit('change', { reason: 'event-items-note', eventId });
+    return true;
+  }
+
   /** Re-scan queued main-queue orders and pull any items that now match an OPEN
    *  event into that event's side-queue. Event routing otherwise only happens at
    *  the moment an order is ingested, which strands orders that were already on
@@ -2163,6 +2176,8 @@ export class QueueEngine extends EventEmitter {
       rippedAt: ev.rippedAt || null, // when the event was marked fulfilled (ripped)
       note: ev.note || '', // admin win-note: who won / what they won
       noteAt: ev.noteAt || null,
+      eventNote: ev.eventNote || '', // internal event note: items used, etc.
+      eventNoteAt: ev.eventNoteAt || null,
       archivedAt: Date.now(),
       entries,
     };
@@ -2483,6 +2498,7 @@ export class QueueEngine extends EventEmitter {
         unfulfilledCount: q.unfulfilledCount, spotsUnfulfilled: q.spotsUnfulfilled,
         status: ev.status, rippedAt: ev.rippedAt || null,
         note: ev.note || '', noteAt: ev.noteAt || null,
+        eventNote: ev.eventNote || '', eventNoteAt: ev.eventNoteAt || null,
         active: this.activeEventId === ev.id, keywords: ev.keywords,
         // Full ordered side-queue (admin panel consumes this; overlay uses
         // activeEvent instead, so this stays admin-only).

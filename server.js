@@ -372,6 +372,8 @@ app.post('/api/events/:id/active', requireAuth, (req, res) => {
 app.post('/api/events/:id/rip', requireAuth, (req, res) => res.json({ ok: queue.ripEvent(req.params.id) }));
 // Set/clear an event's admin win-note (who won / what they won) → { note }.
 app.post('/api/events/:id/note', requireAuth, (req, res) => res.json({ ok: queue.setEventNote(req.params.id, (req.body && req.body.note) || '') }));
+// Set/clear an event's internal Event Note (items used, etc.) → { note }.
+app.post('/api/events/:id/event-note', requireAuth, (req, res) => res.json({ ok: queue.setEventItemsNote(req.params.id, (req.body && req.body.note) || '') }));
 // Reposition an event within the list → { dir: 'up' | 'down' }.
 app.post('/api/events/:id/move', requireAuth, (req, res) => {
   const dir = (req.body && req.body.dir) === 'up' ? 'up' : 'down';

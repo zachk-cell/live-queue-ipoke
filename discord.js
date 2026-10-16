@@ -248,7 +248,13 @@ export async function startDiscord(queue) {
       for (let i = 0; i < chunks.length; i++) {
         if (eventThreadMsgs[i]) {
           try { await eventThreadMsgs[i].edit(chunks[i]); }
-          catch { try { eventThreadMsgs[i] = await eventThread.send(chunks[i]); } catch {} }
+          catch {
+            // Edit failed — replace it, but delete the stale message first so the
+            // thread doesn't accumulate orphaned roster posts over a live.
+            const old = eventThreadMsgs[i];
+            try { eventThreadMsgs[i] = await eventThread.send(chunks[i]); } catch {}
+            try { if (old) await old.delete(); } catch {}
+          }
         } else {
           try { eventThreadMsgs[i] = await eventThread.send(chunks[i]); } catch {}
         }
@@ -301,7 +307,12 @@ export async function startDiscord(queue) {
           await syncEventThread();
         }
       } else {
-        await liveMessage.edit(queueContent);
+        // Edit the existing messages IN PLACE. Each edit is guarded on its own so a
+        // transient failure on one never bubbles out and trips the fresh-start
+        // repost path below (which is what used to spam the channel with a brand-new
+        // queue/event post on every update). On failure we keep the handle and just
+        // retry the edit on the next tick.
+        try { await liveMessage.edit(queueContent); } catch (e) { console.warn('[discord] queue edit failed (will retry):', e.message); }
         if (pigContent) {
           if (pigMessage) {
             try { await pigMessage.edit(pigContent); } catch { pigMessage = null; }
@@ -333,12 +344,12 @@ export async function startDiscord(queue) {
         }
       }
     } catch (e) {
-      console.warn('[discord] refresh failed:', e.message);
-      liveMessage = null;
-      pigMessage = null;
-      eventMessage = null;
-      eventThread = null;
-      eventThreadMsgs = [];
+      // Do NOT reset the message handles here. Nulling them forces the next refresh
+      // into the "fresh start" branch, which deletes recent bot messages and RE-POSTS
+      // the queue/event messages — the cause of the channel filling with new posts on
+      // every update. Keep the handles and let the next tick retry editing in place.
+      // (A genuine restart still rebuilds cleanly, because handles start null then.)
+      console.warn('[discord] refresh failed (keeping existing messages, will retry):', e.message);
     }
   }
 

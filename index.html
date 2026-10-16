@@ -389,6 +389,9 @@
   .ebtns .enote:hover{filter:brightness(1.15)}
   .enotebox{margin-top:6px;background:#241a3a;border:1px solid #4a3a6b;color:#e5d8ff;border-radius:8px;
     padding:7px 10px;font-size:12.5px;line-height:1.4;white-space:pre-wrap;word-break:break-word}
+  .ebtns .enote2{color:#8fd0c0;border-color:#2a5a4e}
+  .ebtns .enote2.on{background:#123a30;color:#9fe8d0;border-color:#2f7a64}
+  .enotebox2{background:#123029;border-color:#2a5a4e;color:#cdeee2}
   .ekw{color:#748099;font-size:11.5px;margin-top:5px}
   .espots-wrap{margin-top:7px}
   .espots-meter{height:7px;border-radius:5px;background:#1d212b;overflow:hidden;margin-top:4px}
@@ -1814,19 +1817,19 @@
       return;
     }
     // Seed editable defaults onto each candidate.
-    cands.forEach(c=>{ c.seats = (c.onHand!=null ? String(c.onHand) : ''); c._on = true; });
-    sub.textContent = 'Found '+cands.length+' new '+(cands.length===1?'event':'events')+(j.alreadyLinked?(' · '+j.alreadyLinked+' already added'):'')+'. Pick which to add — seats prefilled from Shopify on-hand (blank = untracked, tracks orders immediately).';
+    cands.forEach(c=>{ c.seats = (c.available!=null ? String(c.available) : ''); c._on = true; });
+    sub.textContent = 'Found '+cands.length+' new '+(cands.length===1?'event':'events')+(j.alreadyLinked?(' · '+j.alreadyLinked+' already added'):'')+'. Pick which to add — seats prefilled from Shopify available/sellable count (blank = untracked, tracks orders immediately).';
     list.innerHTML = cands.map((c,i)=>`<div class="sync-row" id="sync-row-${i}">
       <input type="checkbox" checked onchange="syncRowToggle(${i})" />
       <div style="min-width:0">
         <div class="sync-nm">${esc(c.title)}</div>
-        <div class="sync-kw">🔑 ${esc(c.keyword)}${c.onHand!=null?' · <span class="sync-onhand">on-hand '+c.onHand+'</span>':''}</div>
+        <div class="sync-kw">🔑 ${esc(c.keyword)}${c.available!=null?' · <span class="sync-onhand">available '+c.available+'</span>':''}</div>
       </div>
       <select onchange="syncCandidates[${i}].type=this.value">
         <option value="quack"${c.type!=='wta'?' selected':''}>Quack</option>
         <option value="wta"${c.type==='wta'?' selected':''}>WTA</option>
       </select>
-      <input class="sync-seats" type="number" min="0" placeholder="—" value="${c.onHand!=null?c.onHand:''}" oninput="syncCandidates[${i}].seats=this.value" title="Seats (blank = untracked)" />
+      <input class="sync-seats" type="number" min="0" placeholder="—" value="${c.available!=null?c.available:''}" oninput="syncCandidates[${i}].seats=this.value" title="Seats (blank = untracked)" />
     </div>`).join('');
     document.getElementById('sync-add-btn').disabled = false;
   }
@@ -1840,7 +1843,7 @@
     if(!items.length){ box.innerHTML = ''; return; }
     const rows = items.map((c,i)=>{
       const when = c.fulfilledAt ? (' · fulfilled '+new Date(c.fulfilledAt).toLocaleDateString()) : '';
-      const oh = (c.onHand!=null) ? (' · <span class="sync-onhand">on-hand '+c.onHand+'</span>') : '';
+      const oh = (c.available!=null) ? (' · <span class="sync-onhand">available '+c.available+'</span>') : '';
       return `<div class="sync-rrow" id="sync-rrow-${i}">
         <div style="min-width:0">
           <div class="sync-nm">${esc(c.title)}</div>
@@ -1864,7 +1867,7 @@
     if(!ok) return;
     const btn = document.querySelector('#sync-rrow-'+i+' .sync-readd');
     if(btn){ btn.disabled = true; btn.textContent = 'Added'; }
-    const seats = (c.onHand==null) ? 0 : Math.max(0, Math.floor(Number(c.onHand)||0));
+    const seats = (c.available==null) ? 0 : Math.max(0, Math.floor(Number(c.available)||0));
     await postJSON('/api/events', {
       type: c.type||'quack',
       title: c.title,
@@ -1912,6 +1915,16 @@
     if(next===null) return; // cancelled
     if(next===cur) return;  // unchanged
     try{ await postJSON('/api/events/'+encodeURIComponent(id)+'/note',{note:next}); }
+    catch{ alert("Couldn't save the note — check your connection and try again."); }
+  }
+  // Event Note (internal): track what specific items are used for this event.
+  async function editEventItemsNote(id){
+    const ev=(state.events||[]).find(e=>e.id===id);
+    const cur=(ev&&ev.eventNote)||'';
+    const next=window.prompt('Event Note (internal) for "'+((ev&&ev.title)||'event')+'"\n(e.g. the specific items/product being used — saved to Past Events when archived):', cur);
+    if(next===null) return;
+    if(next===cur) return;
+    try{ await postJSON('/api/events/'+encodeURIComponent(id)+'/event-note',{note:next}); }
     catch{ alert("Couldn't save the note — check your connection and try again."); }
   }
   async function ripEventUI(id){
@@ -2012,7 +2025,7 @@
     const evs = state.events||[];
     const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,
       e.unfulfilledCount,e.entryCount,
-      (e.keywords||[]).join(','), (e.note||''), expandedEvents.has(e.id)?1:0,
+      (e.keywords||[]).join(','), (e.note||''), (e.eventNote||''), expandedEvents.has(e.id)?1:0,
       expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
     if(!force && box._sig===sig) return;
     box._sig = sig;
@@ -2053,7 +2066,8 @@
             <button class="elabels" title="Print a label for everyone in this event's queue" onclick="printEventLabels('${e.id}')">🖨 Labels</button>
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
-            <button class="enote ${e.note?'on':''}" onclick="editEventNote('${e.id}')" title="Add/edit a win note — who won and what they won. Saved to Past Events when archived.">📝 ${e.note?'Note ✓':'Note'}</button>
+            <button class="enote ${e.note?'on':''}" onclick="editEventNote('${e.id}')" title="Winner Note — who won and what they won. Saved to Past Events when archived.">📝 ${e.note?'Winner ✓':'Winner Note'}</button>
+            <button class="enote enote2 ${e.eventNote?'on':''}" onclick="editEventItemsNote('${e.id}')" title="Event Note (internal) — what specific items are being used for this event. Saved to Past Events when archived.">🎟 ${e.eventNote?'Event ✓':'Event Note'}</button>
             <button class="eedit" onclick="editEvent('${e.id}')">Edit</button>
             ${ripped
               ? `<button class="earch" onclick="archiveEventUI('${e.id}')" title="Save this event and its roster to Past Events, then clear it off the board">✓ Remove &amp; Archive</button>`
@@ -2065,7 +2079,8 @@
           ${e.totalSpots>0?`<div class="espots-meter"><i style="width:${pct}%${e.oversold?';background:linear-gradient(90deg,#ff5d5d,#ff9a5d)':''}"></i></div>`:''}
         </div>
         ${e.description?`<div class="ekw">${esc(e.description)}</div>`:''}
-        ${e.note?`<div class="enotebox" title="Win note — archives with the event">📝 ${esc(e.note)}</div>`:''}
+        ${e.note?`<div class="enotebox" title="Winner Note — archives with the event">📝 <b>Winner:</b> ${esc(e.note)}</div>`:''}
+        ${e.eventNote?`<div class="enotebox enotebox2" title="Event Note (internal) — archives with the event">🎟 <b>Event:</b> ${esc(e.eventNote)}</div>`:''}
         <div class="ekw">🔑 ${(e.keywords||[]).map(esc).join(', ')||'<i>no keywords</i>'}</div>
         <button class="eexpand" onclick="toggleEventQueue('${e.id}')">${expandedEvents.has(e.id)?'▾ Hide':'▸ Show'} side-queue (${(e.unfulfilledCount!=null && e.unfulfilledCount!==e.entryCount)?`${e.unfulfilledCount} left of ${e.entryCount}`:e.entryCount})</button>
         <div class="equeue">${eq}<button class="eqadd" onclick="openAddSeat('${e.id}')">＋ Add seat</button></div>
