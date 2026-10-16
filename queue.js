@@ -998,6 +998,11 @@ export class QueueEngine extends EventEmitter {
       reachedTopAt: reachedAts.length ? Math.min(...reachedAts) : null,
       priorityAt,
       bumped: !!first.bumped,
+      // Manual add: an admin-inserted slot pinned to a chosen position (1 = top,
+      // above priority). pinnedAt breaks ties between two pins at the same position.
+      pinnedPos: (first.pinnedPos != null ? first.pinnedPos : null),
+      pinnedAt: first.pinnedAt || null,
+      manual: !!first.manual,
       priorFulfilled,
       // True when a new order merged into this slot while it was already #1 in
       // the queue — surfaced as a loud "ADDED MORE" badge in the panel. The
@@ -1069,6 +1074,47 @@ export class QueueEngine extends EventEmitter {
     this._persist();
     this.emit('change', { reason: 'bumped', batchKey });
     return { batchKey };
+  }
+
+  /** Manually add a buyer into the Rip-Live queue as their own slot, pinned to a
+   *  chosen position (1 = top, which sits ABOVE priority slots). For off-platform
+   *  or comped adds the admin enters by hand. Its own unique buyerId so it never
+   *  merges with a real buyer. */
+  addManualQueueOrder({ buyer, orderName, position } = {}) {
+    const nm = String(buyer == null ? '' : buyer).trim() || 'Manual add';
+    const pos = Math.max(1, Math.floor(Number(position) || 1));
+    const id = `manual:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const buyerId = id;
+    const order = {
+      id,
+      buyerId,
+      buyer: nm,
+      buyerHandle: '',
+      items: [],
+      total: 0,
+      createdAt: Date.now(),
+      receivedAt: Date.now(),
+      status: 'queued',
+      batchKey: `${buyerId}#${++this.batchCounter}`,
+      hasPriority: false,
+      mergedWhileTop: false,
+      onHold: false,
+      source: '',
+      orderName: String(orderName == null ? '' : orderName).trim(),
+      fullName: '',
+      shipping: null,
+      afterTopOf: null,
+      manual: true,
+      pinnedPos: pos,
+      pinnedAt: Date.now(),
+    };
+    this.orders.set(id, order);
+    this._markTopReached();
+    this._persist();
+    const entry = this._entryFor(order.batchKey);
+    this.emit('change', { reason: 'manual-queue-add', orderId: id, entry });
+    this.emit('new-slot', entry);
+    return entry;
   }
 
   /** Put a slot ON HOLD: move it off the main queue into the held side-list
@@ -1224,13 +1270,27 @@ export class QueueEngine extends EventEmitter {
       [...this.orders.values()].filter((o) => o.status === 'queued').map((o) => o.batchKey)
     );
     const entries = [...keys].map((k) => this._entryFor(k)).filter(Boolean);
-    entries.sort((a, b) => {
+    // Manually pinned slots (admin "add to queue at position N") are placed at their
+    // chosen index AFTER everything else is ordered — so a pin at position 1 sits at
+    // the very top, above priority slots. The rest keep the normal ordering:
+    //   bumped slot → priority (earliest priority-item time) → normal (earliest time).
+    const pinned = entries.filter((e) => e.pinnedPos != null && !e.bumped);
+    const rest = entries.filter((e) => e.pinnedPos == null || e.bumped);
+    rest.sort((a, b) => {
       if (a.bumped !== b.bumped) return a.bumped ? -1 : 1;
       if (a.isPriority !== b.isPriority) return a.isPriority ? -1 : 1;
       if (a.isPriority) return a.priorityAt - b.priorityAt;
       return a.firstOrderAt - b.firstOrderAt;
     });
-    return entries.map((e, i) => ({ ...e, position: i + 1 }));
+    // Insert pins in position order (lower position first; ties by pin time) so two
+    // pins at the same spot keep a stable order.
+    pinned.sort((a, b) => ((a.pinnedPos || 1) - (b.pinnedPos || 1)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
+    const list = rest;
+    for (const p of pinned) {
+      const idx = Math.min(Math.max((Number(p.pinnedPos) || 1) - 1, 0), list.length);
+      list.splice(idx, 0, p);
+    }
+    return list.map((e, i) => ({ ...e, position: i + 1 }));
   }
 
   fulfilledSlots() {

@@ -401,6 +401,10 @@
   .eqrow{display:flex;align-items:center;gap:9px;padding:4px 0;font-size:12.5px;color:#c2c9d6}
   .eqrow .eqpos{color:var(--muted);font-weight:800;min-width:22px;font-variant-numeric:tabular-nums}
   .eqrow .eqnm{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qaddb{background:#12303a;border:1px solid #2a6b82;color:#7fdce8;cursor:pointer;font-size:12px;font-weight:700;padding:5px 11px;border-radius:8px;text-transform:none;letter-spacing:0}
+  .qaddb:hover{filter:brightness(1.15)}
+  .slot.manual{border-color:#2a6b82;box-shadow:0 0 0 1px rgba(127,220,232,.35) inset}
+  .badge.manualadd{background:#12303a;color:#7fdce8;border:1px solid #2a6b82}
   .eqrow .eqtime{color:#8a93a6;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
   .eqrow .eqord{flex:1;color:#748099;font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .eqrow .eqsp{color:var(--pri);font-weight:800}
@@ -471,7 +475,8 @@
   <div id="queue-block">
     <div class="sectitle" style="display:flex;align-items:center;gap:10px">
       <span>Active queue — Rip Live — top is next</span>
-      <label class="pagesize">Show
+      <button class="qaddb" onclick="addManualQueueUI()" title="Manually add someone into the Rip-Live queue at a chosen position (default: top)">＋ Add to queue</button>
+      <label class="pagesize" style="margin-left:auto">Show
         <select id="page-size" onchange="setQueuePageSize(this.value)">
           <option value="10">10</option>
           <option value="25">25</option>
@@ -745,6 +750,19 @@
   async function post(url){ await fetch(url,{method:'POST'}); }
   function fulfill(key){ post('/api/fulfill/'+encodeURIComponent(key)); }
   function bump(key){ post('/api/bump/'+encodeURIComponent(key)); }
+  // Manually add a buyer into the Rip-Live queue at a chosen position (default top).
+  async function addManualQueueUI(){
+    const name = window.prompt('Add to the Rip-Live queue — buyer name:', '');
+    if(name===null) return;
+    const nm = String(name).trim();
+    if(!nm){ alert('Enter a name.'); return; }
+    const posRaw = window.prompt('Position in the queue?\n1 = top of the queue (sits above priority). Leave at 1 for top.', '1');
+    if(posRaw===null) return;
+    let pos = Math.floor(Number(posRaw));
+    if(!Number.isFinite(pos) || pos < 1) pos = 1;
+    try{ await postJSON('/api/manual-order', { buyer: nm, position: pos }); }
+    catch{ alert("Couldn't add to the queue — check your connection and try again."); }
+  }
   function holdOrder(key){ post('/api/hold/'+encodeURIComponent(key)); }
   function unholdOrder(key){ post('/api/unhold/'+encodeURIComponent(key)); }
 
@@ -1045,6 +1063,7 @@
     const itemStr = e.items.map(i=>`${i.qty}× ${i.name}`).join(', ');
     const priBadge = e.isPriority?('<span class="badge pri">PRIORITY</span>'+(e.bigDollar?'<span class="badge bigd" title="Order total is $1,000+ — jumps the queue">💰 $1K+</span>':'')):'';
     const countBadge = `<span class="badge multi">${e.orderCount} order${e.orderCount===1?'':'s'}</span>`;
+    const manualBadge = e.manual ? `<span class="badge manualadd" title="Manually added to the queue by an admin${e.pinnedPos?(' · pinned to position '+e.pinnedPos):''}">✚ MANUAL</span>` : '';
     // Loud heads-up: this buyer ordered AGAIN while already at the top (bag likely
     // in progress). Only flash it while they're CURRENTLY #1 — the one being
     // packed right now; if a bump/priority pushes them down it stops flashing.
@@ -1106,7 +1125,7 @@
     return `<div class="slotmain">`
       + `<button class="removeb" title="Remove from queue (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`
       + `<div class="pos">${e.position}</div>`
-      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
+      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${manualBadge} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
       + `<div class="items">${esc(itemStr)}</div>`
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
@@ -1125,7 +1144,7 @@
       e.firstOrderAt||'',e.reachedTopAt||'',
       // iPoke fields that change a row's contents:
       e.prepped?1:0,e.sourceShort||'',e.nameOverridden?1:0,selectedKeys.has(e.key)?1:0,
-      e.followupCount||0,e.afterTop?1:0,
+      e.followupCount||0,e.afterTop?1:0,e.manual?1:0,(e.pinnedPos==null?'':e.pinnedPos),
       e.orderIds.join(','),e.items.map(i=>i.qty+'x'+i.name).join('|')].join('~');
   }
   // Tick every live slot's timer text in place (no re-render, so it never fights
@@ -1233,7 +1252,7 @@
       seen.add(e.key);
       let node = slotNodes.get(e.key);
       const sig = slotSig(e);
-      const xtra = (e.prepped?' prepped':'')+(selectedKeys.has(e.key)?' selected':'');
+      const xtra = (e.prepped?' prepped':'')+(selectedKeys.has(e.key)?' selected':'')+(e.manual?' manual':'');
       if(!node){
         node = document.createElement('div');
         node.className = 'slot new'+(e.isPriority?' priority':'')+(e.bumped?' bumped':'')+((e.reorderedAtTop&&e.position===1)?' reorder':'')+(e.onHold?' onhold':'')+xtra;

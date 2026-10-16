@@ -330,6 +330,12 @@ app.get('/api/state', requireAuth, (_req, res) => res.json(queue.snapshot()));
 app.post('/api/fulfill/:key', requireAuth, (req, res) => res.json({ ok: !!queue.markFulfilled(req.params.key) }));
 app.post('/api/reopen/:key', requireAuth, (req, res) => res.json({ ok: !!queue.reopen(req.params.key) }));
 app.post('/api/bump/:key', requireAuth, (req, res) => res.json({ ok: !!queue.bump(req.params.key) }));
+// Manually add a buyer to the Rip-Live queue at a chosen position → { buyer, orderName, position }.
+app.post('/api/manual-order', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const entry = queue.addManualQueueOrder({ buyer: b.buyer, orderName: b.orderName, position: b.position });
+  res.json({ ok: !!entry, entry: entry || null });
+});
 // Put a slot on hold (off the main queue) / return it to the top of the queue.
 app.post('/api/hold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.holdSlot(req.params.key) }));
 app.post('/api/unhold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.unholdSlot(req.params.key) }));
