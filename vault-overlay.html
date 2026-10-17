@@ -101,18 +101,22 @@
     const op = clamp01(Number(s.opacity) || 0);
     const scale = clampScale(Number(s.scale) || 1);
     const root = document.documentElement.style;
-    root.setProperty('--bg-alpha', panel ? op : 0);
-    // Admin-chosen colours (blank = revert to the overlay's default red/dark).
-    const bg = hexToRgb(s.bgColor);
-    if(bg) root.setProperty('--bg-rgb', bg); else root.removeProperty('--bg-rgb');
+    root.setProperty('--bg-alpha', String(panel ? op : 0));
+    // Panel background colour (admin override, else the default dark vault red).
+    const bgRgb = hexToRgb(s.bgColor) || '22,10,10';
+    // Text colour (admin override, else the default reds).
     const tc = (typeof s.textColor==='string' && /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s.textColor.trim())) ? s.textColor.trim() : '';
     if(tc){ root.setProperty('--red', tc); root.setProperty('--red-soft', tc); root.setProperty('--red-deep', tc); }
     else { root.removeProperty('--red'); root.removeProperty('--red-soft'); root.removeProperty('--red-deep'); }
     const p = document.getElementById('panel');
     if(p){
+      // Set the panel background to a CONCRETE rgba() string so 100% is truly solid
+      // (no CSS-variable-inside-rgba() parsing quirk in OBS's browser). At panel-off
+      // it's fully transparent.
+      p.style.background = panel ? `rgba(${bgRgb}, ${op})` : 'transparent';
       p.style.border = panel ? '' : 'none';        // '' reverts to the CSS off-white frame
       p.style.boxShadow = panel ? '' : 'none';
-      p.style.backdropFilter = (panel && op > 0.02) ? 'blur(6px)' : 'none';
+      p.style.backdropFilter = (panel && op > 0.02 && op < 0.999) ? 'blur(6px)' : 'none';
     }
     wrap.style.transform = `scale(${scale})`;
   }
