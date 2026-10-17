@@ -1080,7 +1080,24 @@ export class QueueEngine extends EventEmitter {
    *  chosen position (1 = top, which sits ABOVE priority slots). For off-platform
    *  or comped adds the admin enters by hand. Its own unique buyerId so it never
    *  merges with a real buyer. */
-  addManualQueueOrder({ buyer, orderName, position } = {}) {
+  /** Parse a free-text item list ("3x Charizard, Pikachu" or newline-separated)
+   *  into [{qty, name}]. Accepts an already-structured array too. */
+  _parseItemsText(input) {
+    if (Array.isArray(input)) {
+      return input
+        .map((it) => ({ qty: Math.max(1, Math.floor(Number(it && it.qty) || 1)), name: String((it && it.name) || '').trim() }))
+        .filter((it) => it.name);
+    }
+    const t = String(input == null ? '' : input).trim();
+    if (!t) return [];
+    return t.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).map((line) => {
+      const m = line.match(/^(\d+)\s*[x×]?\s+(.+)$/i); // optional leading "3x " / "3 " qty
+      if (m) return { qty: Math.max(1, parseInt(m[1], 10) || 1), name: m[2].trim() };
+      return { qty: 1, name: line };
+    });
+  }
+
+  addManualQueueOrder({ buyer, orderName, position, items } = {}) {
     const nm = String(buyer == null ? '' : buyer).trim() || 'Manual add';
     const pos = Math.max(1, Math.floor(Number(position) || 1));
     const id = `manual:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -1090,7 +1107,7 @@ export class QueueEngine extends EventEmitter {
       buyerId,
       buyer: nm,
       buyerHandle: '',
-      items: [],
+      items: this._parseItemsText(items),
       total: 0,
       createdAt: Date.now(),
       receivedAt: Date.now(),
@@ -1115,6 +1132,34 @@ export class QueueEngine extends EventEmitter {
     this.emit('change', { reason: 'manual-queue-add', orderId: id, entry });
     this.emit('new-slot', entry);
     return entry;
+  }
+
+  /** Change a manual slot's pinned position in the queue (1 = top, above priority).
+   *  Only applies to manually-added slots (they carry pinnedPos). */
+  setManualQueuePosition(batchKey, position) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && o.manual,
+    );
+    if (!orders.length) return false;
+    const pos = Math.max(1, Math.floor(Number(position) || 1));
+    for (const o of orders) { o.pinnedPos = pos; o.pinnedAt = Date.now(); }
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'manual-queue-position', batchKey: String(batchKey), position: pos });
+    return true;
+  }
+
+  /** Edit the item list/note on a manual slot (free text or [{qty,name}]). */
+  setManualQueueItems(batchKey, items) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && o.manual,
+    );
+    if (!orders.length) return false;
+    const parsed = this._parseItemsText(items);
+    for (const o of orders) { o.items = parsed; }
+    this._persist();
+    this.emit('change', { reason: 'manual-queue-items', batchKey: String(batchKey) });
+    return true;
   }
 
   /** Put a slot ON HOLD: move it off the main queue into the held side-list
