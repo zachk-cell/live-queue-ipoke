@@ -406,6 +406,7 @@
   .qaddb:hover{filter:brightness(1.15)}
   .actions .mqbtn{background:transparent;border:1px solid #2a6b82;color:#7fdce8;cursor:pointer;font-size:11.5px;font-weight:700;padding:5px 8px;border-radius:7px;white-space:nowrap}
   .actions .mqbtn:hover{filter:brightness(1.15)}
+  .actions .mqbtn.on{background:var(--pri);border-color:var(--pri);color:#2a1e00}
   .slot.manual{border-color:#2a6b82;box-shadow:0 0 0 1px rgba(127,220,232,.35) inset}
   .badge.manualadd{background:#12303a;color:#7fdce8;border:1px solid #2a6b82}
   .eqrow .eqtime{color:#8a93a6;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
@@ -807,6 +808,24 @@
     try{ await postJSON('/api/manual-order/'+encodeURIComponent(key)+'/items', { items: raw }); }
     catch{ alert("Couldn't save the items — check your connection and try again."); }
   }
+  // Toggle a custom (manual) add's priority flag (shows the PRIORITY badge and
+  // sorts it in the priority tier; its pinned position still wins over priority).
+  async function toggleManualPriorityUI(key, makePriority){
+    try{ await postJSON('/api/manual-order/'+encodeURIComponent(key)+'/priority', { priority: !!makePriority }); }
+    catch{ alert("Couldn't change priority — check your connection and try again."); }
+  }
+  // Set a custom (manual) add's dollar total (shows in the money column; $1000+
+  // also triggers the big-dollar queue jump).
+  async function editManualTotalUI(key){
+    const slot = ((state.queue||[])).find(s=>s.key===key);
+    const current = slot && Number(slot.total) ? String(Number(slot.total)) : '';
+    const raw = window.prompt('Dollar amount for this custom order (e.g. 25 or 25.50). Leave blank for $0:', current);
+    if(raw===null) return;
+    let amt = Number(String(raw).replace(/[^0-9.]/g,''));
+    if(!isFinite(amt) || amt < 0) amt = 0;
+    try{ await postJSON('/api/manual-order/'+encodeURIComponent(key)+'/total', { total: amt }); }
+    catch{ alert("Couldn't save the amount — check your connection and try again."); }
+  }
   function holdOrder(key){ post('/api/hold/'+encodeURIComponent(key)); }
   function unholdOrder(key){ post('/api/unhold/'+encodeURIComponent(key)); }
 
@@ -1169,11 +1188,16 @@
       + `<button class="nameb" title="Edit display name" onclick="editName('${e.key}')">✏️</button>`
       + `<button class="prepb ${e.prepped?'on':''}" title="Mark prepped / ready to fulfill" onclick="togglePrep('${e.key}',${e.prepped?'false':'true'})">📦</button>`
     ) : '';
-    // Custom (manual) adds get position + items editors.
+    // Custom (manual) adds get position + items editors. Kept as compact icon
+    // buttons (like the ⛓/✏️/📦 icons) so a manual row doesn't stretch wider than
+    // the standard rows — the tooltips carry the labels. The position button keeps
+    // its number since that's useful to see at a glance.
     const manualActions = e.manual ? (
-        `<button class="mqbtn" title="Set this order's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.pinnedPos||e.position||1})">⇅ Pos ${e.pinnedPos||e.position||1}</button>`
-      + `<button class="mqbtn" title="Set/edit the order number for this custom add (blank by default)" onclick="editManualOrderNoUI('${e.key}')">＃ Order #</button>`
-      + `<button class="mqbtn" title="Edit the items/note on this custom add" onclick="editManualItemsUI('${e.key}')">✎ Items</button>`
+        `<button class="mqbtn" title="Set this order's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.pinnedPos||e.position||1})">⇅ ${e.pinnedPos||e.position||1}</button>`
+      + `<button class="mqbtn${e.manualPriority?' on':''}" title="${e.manualPriority?'Priority is ON — click to turn it off':'Mark this custom order as priority'}" onclick="toggleManualPriorityUI('${e.key}',${e.manualPriority?'false':'true'})">${e.manualPriority?'★':'☆'}</button>`
+      + `<button class="mqbtn" title="Set the dollar amount for this custom order" onclick="editManualTotalUI('${e.key}')">$</button>`
+      + `<button class="mqbtn" title="Set/edit the order number for this custom add (blank by default)" onclick="editManualOrderNoUI('${e.key}')">＃</button>`
+      + `<button class="mqbtn" title="Edit the items / note on this custom add" onclick="editManualItemsUI('${e.key}')">✎</button>`
     ) : '';
     return `<div class="slotmain">`
       + `<button class="removeb" title="Remove from queue (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`

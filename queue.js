@@ -885,6 +885,8 @@ export class QueueEngine extends EventEmitter {
     ).length;
     const priorityOrders = orders.filter((o) => o.hasPriority);
     const keywordPriority = priorityOrders.length > 0;
+    // Manual adds can be flagged priority by an admin toggle (no items/$ to go on).
+    const manualPriority = orders.some((o) => o.manualPriority);
     // (#7) $1000 rule: the FULL pre-split order total drives this — o.total is the
     // whole Shopify order value (never reduced by the event/sealed split), so the
     // batch sum here is the combined pre-split total. A single order or a manually
@@ -892,12 +894,12 @@ export class QueueEngine extends EventEmitter {
     // never affected — they sort purely by purchase time in eventQueue.)
     const batchTotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
     const bigDollar = batchTotal >= PRIORITY_DOLLARS;
-    const isPriority = keywordPriority || bigDollar;
+    const isPriority = keywordPriority || bigDollar || manualPriority;
     // Among priority slots, keep time order: keyword-priority keeps its earliest
-    // priority-item time; a $1000 slot uses its first order time.
+    // priority-item time; a $1000 or manually-flagged slot uses its first order time.
     const priorityAt = keywordPriority
       ? Math.min(...priorityOrders.map((o) => o.createdAt))
-      : (bigDollar ? (first.createdAt || Date.now()) : Infinity);
+      : ((bigDollar || manualPriority) ? (first.createdAt || Date.now()) : Infinity);
 
     // Merge item lines (sum quantities of same-name items).
     const itemMap = new Map();
@@ -1003,6 +1005,7 @@ export class QueueEngine extends EventEmitter {
       pinnedPos: (first.pinnedPos != null ? first.pinnedPos : null),
       pinnedAt: first.pinnedAt || null,
       manual: !!first.manual,
+      manualPriority: !!first.manualPriority,
       movedFromSealed: !!first.movedFromSealed,
       priorFulfilled,
       // True when a new order merged into this slot while it was already #1 in
@@ -1173,6 +1176,42 @@ export class QueueEngine extends EventEmitter {
     for (const o of orders) { o.items = parsed; }
     this._persist();
     this.emit('change', { reason: 'manual-queue-items', batchKey: String(batchKey) });
+    return true;
+  }
+
+  /** Toggle an admin "priority" flag on a manual slot — shows the PRIORITY badge
+   *  and sorts it in the priority tier. Independent of the item-keyword and $1000
+   *  rules (a manual add has no real items/total). The slot's explicit pinned
+   *  position still wins over priority, same as every other pinned slot. */
+  setManualQueuePriority(batchKey, on) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && o.manual,
+    );
+    if (!orders.length) return false;
+    const val = !!on;
+    for (const o of orders) { o.manualPriority = val; }
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'manual-queue-priority', batchKey: String(batchKey), priority: val });
+    return true;
+  }
+
+  /** Set the dollar total on a manual slot (what shows in the money column, and
+   *  what drives the $1000 priority jump). Manual slots start at $0. */
+  setManualQueueTotal(batchKey, total) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && o.manual,
+    );
+    if (!orders.length) return false;
+    let amt = Number(total);
+    if (!isFinite(amt) || amt < 0) amt = 0;
+    amt = Math.round(amt * 100) / 100;
+    // Manual slots are single-order; put it all on the first and zero any others.
+    orders[0].total = amt;
+    for (let i = 1; i < orders.length; i++) orders[i].total = 0;
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'manual-queue-total', batchKey: String(batchKey), total: amt });
     return true;
   }
 
