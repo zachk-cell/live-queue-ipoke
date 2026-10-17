@@ -116,11 +116,15 @@ async function gql(query, variables = {}) {
 // (The team also masks names at the Shopify customer level on request, which
 // flows through here automatically; the in-app override is a further layer.)
 function firstLast(customer, fallbackName) {
-  const f = (customer && customer.firstName || '').trim();
-  const l = (customer && customer.lastName || '').trim();
-  if (f && l) {
-    const two = (l.charAt(0).toUpperCase() + l.slice(1, 2).toLowerCase()).trim();
-    return `${f} ${two}.`; // e.g. "Logan Bo." — period after the two-letter last-name stub
+  // ALWAYS first name + first two letters of the LAST name — never a middle name.
+  // Some customers put "First Middle" in the first-name field (e.g. "Brian Slabach"),
+  // so take only the first word; and use the final surname token for the 2-letter stub.
+  const f = (customer && customer.firstName || '').trim().split(/\s+/)[0] || '';
+  const lFull = (customer && customer.lastName || '').trim();
+  const surname = lFull.split(/\s+/).filter(Boolean).pop() || '';
+  if (f && surname) {
+    const two = (surname.charAt(0).toUpperCase() + surname.slice(1, 2).toLowerCase()).trim();
+    return `${f} ${two}.`; // e.g. "Brian Sl." — first name + 2-letter surname stub + period
   }
   if (f) return f;
   const dn = (customer && customer.displayName || '').trim();

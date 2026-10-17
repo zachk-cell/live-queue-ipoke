@@ -381,9 +381,13 @@ export class QueueEngine extends EventEmitter {
    *  the vault twice — no matter how it gets counted or how often it re-tops. */
   _countVaultOnce(order) {
     if (order.vaultCounted) return false;
-    this._tallyVariants(order);
-    order.vaultCounted = true;
-    return true;
+    const added = this._tallyVariants(order);
+    // Only lock the order as "counted" once it ACTUALLY matched a tracked vault. If
+    // nothing matched (e.g. a vault keyword wasn't set up yet when the order first
+    // reached the top), leave it un-counted so it still gets picked up later — when
+    // the keyword is added — by the next top-reach or the fulfill-grace sweep.
+    if (added > 0) { order.vaultCounted = true; return true; }
+    return false;
   }
 
   /** True if any of an order's items match a tracked (vault) variant. */
@@ -442,7 +446,8 @@ export class QueueEngine extends EventEmitter {
     return m ? Math.max(1, parseInt(m[1], 10)) : 1;
   }
   _tallyVariants(order) {
-    if (!this.trackedVariants.length) return;
+    if (!this.trackedVariants.length) return 0;
+    let added = 0;
     for (const it of (order.items || [])) {
       const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
       const qty = it.qty || 1;
@@ -453,9 +458,11 @@ export class QueueEngine extends EventEmitter {
         if (!varn) continue;
         if ((!prod || text.includes(prod)) && text.includes(varn)) {
           this.variantCounts[v.id] = (this.variantCounts[v.id] || 0) + perItem * qty;
+          added += perItem * qty;
         }
       }
     }
+    return added;
   }
 
   /** Replace the tracked-variant DEFINITIONS (admin editor). Preserves the live
@@ -988,6 +995,8 @@ export class QueueEngine extends EventEmitter {
         }),
       items,
       itemCount: items.reduce((n, i) => n + i.qty, 0),
+      // True when any item matches a tracked Vault — drives the "V" tag on labels.
+      hasVault: this._orderHasVault({ items }),
       total: orders.reduce((s, o) => s + o.total, 0),
       isPriority,
       // (#7) true when this slot is priority specifically because the order/batch
@@ -1361,20 +1370,17 @@ export class QueueEngine extends EventEmitter {
 
   /**
    * Active queue, top = next to handle:
-   *   1. Manually bumped slot.
-   *   2. Priority slots before normal slots.
-   *   3. Priority tier: earliest priority-item purchase first.
-   *      Normal tier: earliest order first.
+   *   1. Manually pinned slots (dragged/added to a spot) — a SOLID BLOCK at the very
+   *      top, in their relative pinned order. Nothing non-pinned (including priority)
+   *      ever sits above them, so fulfilling one just shrinks the block.
+   *   2. Then, among the rest: manually bumped slot → priority (earliest priority-item
+   *      time) → normal (earliest order time).
    */
   activeQueue() {
     const keys = new Set(
       [...this.orders.values()].filter((o) => o.status === 'queued').map((o) => o.batchKey)
     );
     const entries = [...keys].map((k) => this._entryFor(k)).filter(Boolean);
-    // Manually pinned slots (admin "add to queue at position N") are placed at their
-    // chosen index AFTER everything else is ordered — so a pin at position 1 sits at
-    // the very top, above priority slots. The rest keep the normal ordering:
-    //   bumped slot → priority (earliest priority-item time) → normal (earliest time).
     const pinned = entries.filter((e) => e.pinnedPos != null && !e.bumped);
     const rest = entries.filter((e) => e.pinnedPos == null || e.bumped);
     rest.sort((a, b) => {
@@ -1383,14 +1389,14 @@ export class QueueEngine extends EventEmitter {
       if (a.isPriority) return a.priorityAt - b.priorityAt;
       return a.firstOrderAt - b.firstOrderAt;
     });
-    // Insert pins in position order (lower position first; ties by pin time) so two
-    // pins at the same spot keep a stable order.
+    // Pinned slots keep their relative order (lower pinnedPos first; ties by pin time)
+    // and sit as one contiguous block at the TOP, above every non-pinned slot. This
+    // is what keeps a priority order from jumping above the manually-placed ones when
+    // one of them is fulfilled — the block simply gets shorter. A later drag above an
+    // existing pin re-numbers the pins (see reorderQueueSelection), so "drag above"
+    // still works.
     pinned.sort((a, b) => ((a.pinnedPos || 1) - (b.pinnedPos || 1)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
-    const list = rest;
-    for (const p of pinned) {
-      const idx = Math.min(Math.max((Number(p.pinnedPos) || 1) - 1, 0), list.length);
-      list.splice(idx, 0, p);
-    }
+    const list = [...pinned, ...rest];
     return list.map((e, i) => ({ ...e, position: i + 1 }));
   }
 
@@ -1440,6 +1446,20 @@ export class QueueEngine extends EventEmitter {
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'queue-reorder', count: moving.length });
+    return true;
+  }
+
+  /** Revert a manually-placed slot to its natural position: drop its pin (and any
+   *  bump) so it flows back in by priority/time like a normal order. */
+  unpinQueueSlot(batchKey) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && (o.pinnedPos != null || o.bumped),
+    );
+    if (!orders.length) return false;
+    for (const o of orders) { o.pinnedPos = null; o.pinnedAt = null; o.bumped = false; }
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'queue-unpin', batchKey: String(batchKey) });
     return true;
   }
 

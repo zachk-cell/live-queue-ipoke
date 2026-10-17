@@ -361,6 +361,10 @@ app.post('/api/queue-reorder', requireAuth, (req, res) => {
   const b = req.body || {};
   res.json({ ok: queue.reorderQueueSelection(b.keys || [], b.beforeKey) });
 });
+// Revert a manually-placed slot to its natural priority/time position.
+app.post('/api/queue-unpin/:key', requireAuth, (req, res) => {
+  res.json({ ok: queue.unpinQueueSlot(req.params.key) });
+});
 // Put a slot on hold (off the main queue) / return it to the top of the queue.
 app.post('/api/hold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.holdSlot(req.params.key) }));
 app.post('/api/unhold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.unholdSlot(req.params.key) }));

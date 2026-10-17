@@ -45,7 +45,8 @@
   .slotmain{display:flex;align-items:center;gap:12px;padding:12px 14px;flex-wrap:wrap;row-gap:9px}
   /* Keep the name/badge column wide enough that badges flow left-to-right instead of
      stacking one-per-line; the button group drops to its own line when it can't fit. */
-  .slotbtns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .slotbtns{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto;justify-content:flex-end}
+  .slotbtns > button, .slotbtns .labelb{padding:6px 9px}
   /* Batch select + drag-to-reorder controls at the left of each slot. */
   .qdrag{cursor:grab;color:#5a6372;font-size:15px;flex:none;user-select:none;line-height:1}
   .qdrag:active{cursor:grabbing}
@@ -76,7 +77,7 @@
   .details .dts-solo{margin:2px 0 6px}
   .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:18px;width:34px;text-align:center;color:var(--muted)}
   .slot.priority .pos{color:var(--pri)}
-  .who{flex:1 1 260px;min-width:240px}
+  .who{flex:1 1 220px;min-width:200px}
   .who .name{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;
     min-width:0;flex-wrap:wrap}
   /* Order number must never be clipped — keep it whole and let it wrap to the next
@@ -96,8 +97,8 @@
   .idtag{color:var(--muted);font-size:11px;font-weight:600;flex:none}
   .who .items{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .money{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;margin-right:4px;white-space:nowrap}
-  .actions{display:flex;gap:8px;align-items:center}
-  .actions button{padding:8px 11px}
+  .actions{display:flex;gap:6px;align-items:center}
+  .actions button{padding:6px 9px}
   .fulfill{background:var(--done);border-color:var(--done);color:#04180d;margin-left:16px}
   .bumpb{background:transparent;color:var(--accent)}
   .labelb{background:transparent;color:#cdd4e4}
@@ -425,7 +426,8 @@
   .eqrow .eqnm{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .qaddb{background:#12303a;border:1px solid #2a6b82;color:#7fdce8;cursor:pointer;font-size:12px;font-weight:700;padding:5px 11px;border-radius:8px;text-transform:none;letter-spacing:0}
   .qaddb:hover{filter:brightness(1.15)}
-  .actions .mqbtn{background:transparent;border:1px solid #2a6b82;color:#7fdce8;cursor:pointer;font-size:11.5px;font-weight:700;padding:5px 8px;border-radius:7px;white-space:nowrap}
+  .actions .mqbtn{background:transparent;border:1px solid #2a6b82;color:#7fdce8;cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 6px;border-radius:7px;white-space:nowrap}
+  .actions .mqbtn.unpin{border-color:#7a5a2a;color:#ffce7a}
   .actions .mqbtn:hover{filter:brightness(1.15)}
   .actions .mqbtn.on{background:var(--pri);border-color:var(--pri);color:#2a1e00}
   .slot.manual{border-color:#2a6b82;box-shadow:0 0 0 1px rgba(127,220,232,.35) inset}
@@ -849,6 +851,8 @@
   }
   function holdOrder(key){ post('/api/hold/'+encodeURIComponent(key)); }
   function unholdOrder(key){ post('/api/unhold/'+encodeURIComponent(key)); }
+  // Revert a manually-placed slot back to its natural priority/time position.
+  function unpinOrderUI(key){ post('/api/queue-unpin/'+encodeURIComponent(key)); }
 
   // Deliberate confirmation modal (returns a Promise<boolean>). Used for the
   // destructive actions — Reset, End Live, Remove — so they can't be blown
@@ -951,7 +955,9 @@
       /* Order source, pinned to the bottom-right corner. Black text + outline (no
          fill) so it always prints on a thermal label. Out of flow, so it never
          affects the auto-shrink height fit. */
-      .srctag{position:absolute;right:0.055in;bottom:0.04in;font-size:9px;font-weight:800;
+      /* Bottom-right corner holds the Vault "V" (left) and the TT/SF source tag (right). */
+      .corner{position:absolute;right:0.055in;bottom:0.04in;display:flex;gap:3px;align-items:center}
+      .srctag,.vtag{font-size:9px;font-weight:800;
         letter-spacing:.5px;color:#000;border:1.25px solid #000;border-radius:3px;padding:0 3px;line-height:1.35}
       /* International customs note (bottom-left): blank Q:/V: lines for the team to
          write on. Extra vertical space between Q and V so there's room to handwrite. */
@@ -963,7 +969,7 @@
       ${idTag?`<div class="idtag">${esc(idTag)}</div>`:''}
       ${countLine?`<div class="count">${esc(countLine)}</div>`:''}
       ${ordLine?`<div class="ord" id="o">${esc(ordLine)}</div>`:''}
-      ${srcTag?`<div class="srctag">${esc(srcTag)}</div>`:''}
+      ${(srcTag||e.hasVault)?`<div class="corner">${e.hasVault?`<span class="vtag">V</span>`:''}${srcTag?`<span class="srctag">${esc(srcTag)}</span>`:''}</div>`:''}
       ${intl?`<div class="customs"><div class="cl">Q:</div><div class="cl cl2">V:</div></div>`:''}
       <script>(function(){
         function shrinkWidth(el,start,min){var s=start;el.style.fontSize=s+'px';
@@ -1308,12 +1314,16 @@
     // the standard rows — the tooltips carry the labels. The position button keeps
     // its number since that's useful to see at a glance.
     const manualActions = e.manual ? (
-        `<button class="mqbtn" title="Set this order's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.pinnedPos||e.position||1})">⇅ ${e.pinnedPos||e.position||1}</button>`
+        `<button class="mqbtn" title="Set this order's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.position||1})">⇅ ${e.position||1}</button>`
       + `<button class="mqbtn${e.manualPriority?' on':''}" title="${e.manualPriority?'Priority is ON — click to turn it off':'Mark this custom order as priority'}" onclick="toggleManualPriorityUI('${e.key}',${e.manualPriority?'false':'true'})">${e.manualPriority?'★':'☆'}</button>`
       + `<button class="mqbtn" title="Set the dollar amount for this custom order" onclick="editManualTotalUI('${e.key}')">$</button>`
       + `<button class="mqbtn" title="Set/edit the order number for this custom add (blank by default)" onclick="editManualOrderNoUI('${e.key}')">＃</button>`
       + `<button class="mqbtn" title="Edit the items / note on this custom add" onclick="editManualItemsUI('${e.key}')">✎</button>`
     ) : '';
+    // Revert button — shows on any manually-placed slot (dragged/pinned or bumped) so
+    // it can be sent back to its natural priority/time position.
+    const unpinBtn = (e.pinnedPos != null || e.bumped)
+      ? `<button class="mqbtn unpin" title="Revert to its natural position (remove the manual placement)" onclick="unpinOrderUI('${e.key}')">↺</button>` : '';
     return `<div class="slotmain">`
       + `<span class="qdrag" draggable="true" title="Drag to move this order (or all selected orders) to a new spot in the queue" ondragstart="qDragStart(event,'${e.key}')" ondragend="qDragEnd(event)">⠿</span>`
       + `<input type="checkbox" class="selchk" ${selectedKeys.has(e.key)?'checked':''} title="Select this order — tick several, then drag any one to move them together (or Combine same-name orders)" onclick="event.stopPropagation()" onchange="toggleSelect('${e.key}')">`
@@ -1327,8 +1337,8 @@
       + `<button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('${e.key}')">🏷 Label</button>`
       + `<button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('queue','${e.key}')">📦 Packing</button>`
       + `<div class="money">${money(e.total)}</div>`
-      + `<div class="actions">${manualActions}${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
-      + `<button class="holdb" title="Put on hold — moves it to the On-hold sidebar until you're ready" onclick="holdOrder('${e.key}')">⏸ Hold</button>`
+      + `<div class="actions">${manualActions}${unpinBtn}${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
+      + `<button class="holdb" title="Put on hold — moves it to the On-hold sidebar until you're ready" onclick="holdOrder('${e.key}')">⏸</button>`
       + `<button class="fulfill" onclick="fulfill('${e.key}')">✓ Fulfilled</button></div>`
       + `</div>`
       + `</div>`
