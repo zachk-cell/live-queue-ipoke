@@ -42,7 +42,10 @@
   .sectitle.collapsed .cav{transform:rotate(-90deg)}
   .secount{color:var(--muted);font-weight:700;letter-spacing:0}
   .slot{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:9px}
-  .slotmain{display:flex;align-items:center;gap:12px;padding:12px 14px}
+  .slotmain{display:flex;align-items:center;gap:12px;padding:12px 14px;flex-wrap:wrap;row-gap:9px}
+  /* Keep the name/badge column wide enough that badges flow left-to-right instead of
+     stacking one-per-line; the button group drops to its own line when it can't fit. */
+  .slotbtns{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   /* Batch select + drag-to-reorder controls at the left of each slot. */
   .qdrag{cursor:grab;color:#5a6372;font-size:15px;flex:none;user-select:none;line-height:1}
   .qdrag:active{cursor:grabbing}
@@ -73,7 +76,7 @@
   .details .dts-solo{margin:2px 0 6px}
   .pos{font-variant-numeric:tabular-nums;font-weight:800;font-size:18px;width:34px;text-align:center;color:var(--muted)}
   .slot.priority .pos{color:var(--pri)}
-  .who{flex:1;min-width:0}
+  .who{flex:1 1 260px;min-width:240px}
   .who .name{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;
     min-width:0;flex-wrap:wrap}
   /* Order number must never be clipped — keep it whole and let it wrap to the next
@@ -1274,6 +1277,7 @@
       + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${manualBadge} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
       + `<div class="items">${esc(itemStr)}</div>`
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
+      + `<div class="slotbtns">`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
       + `<button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('${e.key}')">🏷 Label</button>`
       + `<button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('queue','${e.key}')">📦 Packing</button>`
@@ -1281,6 +1285,7 @@
       + `<div class="actions">${manualActions}${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
       + `<button class="holdb" title="Put on hold — moves it to the On-hold sidebar until you're ready" onclick="holdOrder('${e.key}')">⏸ Hold</button>`
       + `<button class="fulfill" onclick="fulfill('${e.key}')">✓ Fulfilled</button></div>`
+      + `</div>`
       + `</div>`
       + `<div class="details">${detailItems}${detailOrds}</div>`;
   }
