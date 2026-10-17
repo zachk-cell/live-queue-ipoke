@@ -905,12 +905,14 @@
     // display name, print a last-4 id tag so the right bag goes to the right person.
     const dupe = (state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
     const idTag = dupe ? ('id …'+String(e.buyerId||'').slice(-4)) : '';
+    // Source tag (bottom-right): TT = TikTok order, SF = Shopify (web) order.
+    const srcTag = e.sourceShort || '';
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page{size:2.25in 1.25in;margin:0}
       html,body{margin:0;padding:0;width:2.25in;height:1.25in}
       body{display:flex;flex-direction:column;justify-content:center;align-items:center;
         box-sizing:border-box;padding:0.05in 0.08in;font-family:Arial,Helvetica,sans-serif;
-        text-align:center;color:#000;background:#fff;overflow:hidden}
+        text-align:center;color:#000;background:#fff;overflow:hidden;position:relative}
       .flag{border:1.5px solid #000;color:#000;background:#fff;font-weight:800;font-size:8.5px;
         padding:1px 6px;border-radius:3px;letter-spacing:.4px;margin-bottom:3px;white-space:nowrap}
       .uname{font-weight:800;line-height:1.03;word-break:break-word;max-width:100%}
@@ -918,12 +920,18 @@
       .count{font-size:10px;font-weight:700;margin-top:2px;text-transform:uppercase;letter-spacing:.4px}
       .ord{margin-top:5px;font-family:'Courier New',monospace;font-weight:700;line-height:1.15;
         word-break:break-all;max-width:100%}
+      /* Order source, pinned to the bottom-right corner. Black text + outline (no
+         fill) so it always prints on a thermal label. Out of flow, so it never
+         affects the auto-shrink height fit. */
+      .srctag{position:absolute;right:0.055in;bottom:0.04in;font-size:9px;font-weight:800;
+        letter-spacing:.5px;color:#000;border:1.25px solid #000;border-radius:3px;padding:0 3px;line-height:1.35}
     </style></head><body>
       ${flags.map(f=>`<div class="flag">${esc(f)}</div>`).join('')}
       <div class="uname" id="u">${esc(uname)}</div>
       ${idTag?`<div class="idtag">${esc(idTag)}</div>`:''}
       ${countLine?`<div class="count">${esc(countLine)}</div>`:''}
       ${ordLine?`<div class="ord" id="o">${esc(ordLine)}</div>`:''}
+      ${srcTag?`<div class="srctag">${esc(srcTag)}</div>`:''}
       <script>(function(){
         function shrinkWidth(el,start,min){var s=start;el.style.fontSize=s+'px';
           while(s>min && el.scrollWidth>el.clientWidth){s--;el.style.fontSize=s+'px';}return s;}
@@ -976,15 +984,19 @@
       const pos=en.position!=null?en.position:'';
       const meta=[ord, `×${sp}`].filter(Boolean).join(' · ');
       const posTxt=(pos!==''?('Pos '+pos):'');
-      return `<div class="lbl"><div class="pos">${posTxt}</div><div class="body"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${meta}</div></div></div>`;
+      const src=srcShort(en.source);
+      return `<div class="lbl"><div class="pos">${posTxt}</div><div class="body"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${meta}</div></div>${src?`<div class="src">${esc(src)}</div>`:''}</div>`;
     }).join('');
     const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page{size:2.25in 1.25in;margin:0}
       html,body{margin:0;padding:0;background:#fff;color:#000}
       .lbl{width:2.25in;height:1.25in;box-sizing:border-box;padding:0.05in 0.08in;
-        display:flex;flex-direction:column;
+        display:flex;flex-direction:column;position:relative;
         font-family:Arial,Helvetica,sans-serif;page-break-after:always;overflow:hidden}
       .lbl:last-child{page-break-after:auto}
+      /* Order source (TT = TikTok, SF = Shopify), pinned bottom-right. */
+      .lbl .src{position:absolute;right:0.055in;bottom:0.04in;font-size:9px;font-weight:800;
+        letter-spacing:.5px;color:#000;border:1.25px solid #000;border-radius:3px;padding:0 3px;line-height:1.35}
       /* Position badge, pinned top-left so it's the first thing the packer reads. */
       .lbl .pos{flex:none;font-size:8.5pt;font-weight:800;font-family:'Courier New',monospace;
         text-align:left;line-height:1}
