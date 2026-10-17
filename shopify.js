@@ -588,6 +588,12 @@ function _canonKw(s) {
     .toLowerCase()
     .replace(/[‘’ʼ`´]/g, "'")
     .replace(/'/g, '')
+    // Treat ALL other punctuation/symbols as a separator so trailing or internal
+    // marks never block a match: "Blister!" == "Blister", "Heartgold/Soulsilver"
+    // == "Heartgold Soulsilver", "(Mini) X" == "Mini X". This is what makes the
+    // archived-event dedup robust to punctuation drift between the Shopify product
+    // title and the stored event name (the "!" that kept re-adding finished quacks).
+    .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }

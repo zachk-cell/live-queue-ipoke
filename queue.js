@@ -2391,6 +2391,22 @@ export class QueueEngine extends EventEmitter {
       .trim();
   }
 
+  /** Punctuation-insensitive event-name key used ONLY for archived-event dedup
+   *  (the Shopify auto-sync "don't re-add a finished event" guard). Unlike _canon
+   *  — which stays as-is because it also drives order→event keyword routing — this
+   *  collapses ALL punctuation to spaces, so a product title that differs from the
+   *  archived event name by only a "!", "/", "(…)" etc. still matches and is NOT
+   *  re-added. Mirrors shopify.js _canonKw exactly so both sides agree. */
+  _looseEventName(s) {
+    return String(s == null ? '' : s)
+      .toLowerCase()
+      .replace(/[‘’ʼ`´]/g, "'")
+      .replace(/'/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   /** Record one event spot entry (its own line, qty = spot count). Idempotent
    *  on (event, order, line index). */
   _addEventEntry(ev, item, raw, idx) {
@@ -2516,10 +2532,10 @@ export class QueueEngine extends EventEmitter {
     // finished event on the next sync cycle. This is independent of the sync's
     // own candidate filter, so even a filter edge-case can't slip a dup through.
     if (auto) {
-      const canon = this._canon(title || '');
-      if (canon) {
-        const done = (this.fulfilledEventNames || []).some((r) => r && r.canon === canon)
-          || (this.pastEvents || []).some((p) => p && this._canon(p.title || '') === canon);
+      const loose = this._looseEventName(title || '');
+      if (loose) {
+        const done = (this.fulfilledEventNames || []).some((r) => r && this._looseEventName(r.title || r.canon || '') === loose)
+          || (this.pastEvents || []).some((p) => p && this._looseEventName(p.title || '') === loose);
         if (done) {
           console.log(`[queue] auto-sync skipped already-finished event (dedup guard): ${title}`);
           return null;
