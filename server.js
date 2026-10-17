@@ -344,6 +344,10 @@ app.post('/api/manual-order/:key/position', requireAuth, (req, res) => {
 app.post('/api/manual-order/:key/items', requireAuth, (req, res) => {
   res.json({ ok: queue.setManualQueueItems(req.params.key, (req.body && req.body.items)) });
 });
+// Set/clear a manual slot's order number → { orderName }.
+app.post('/api/manual-order/:key/order-name', requireAuth, (req, res) => {
+  res.json({ ok: queue.setManualQueueOrderName(req.params.key, (req.body && req.body.orderName) || '') });
+});
 // Put a slot on hold (off the main queue) / return it to the top of the queue.
 app.post('/api/hold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.holdSlot(req.params.key) }));
 app.post('/api/unhold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.unholdSlot(req.params.key) }));

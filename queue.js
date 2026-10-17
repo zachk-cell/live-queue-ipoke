@@ -963,7 +963,7 @@ export class QueueEngine extends EventEmitter {
       // Human-facing Shopify order number(s) (e.g. "#50936") for each order in
       // the slot — what the queue displays. Falls back to the internal id only
       // for orders whose name hasn't been captured yet.
-      orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
+      orderNames: orders.map((o) => o.orderName || (String(o.id).startsWith('manual:') ? '' : ('#' + String(o.id)))),
       orderCount: orders.length,
       // Per-order breakdown (oldest first) so the panel can group the expanded
       // view by order number and separate anything added after the buyer hit #1.
@@ -1149,6 +1149,19 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Set/clear the order number shown on a manual slot (blank by default). */
+  setManualQueueOrderName(batchKey, orderName) {
+    const orders = [...this.orders.values()].filter(
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && o.manual,
+    );
+    if (!orders.length) return false;
+    const nm = String(orderName == null ? '' : orderName).trim();
+    for (const o of orders) { o.orderName = nm; }
+    this._persist();
+    this.emit('change', { reason: 'manual-queue-ordername', batchKey: String(batchKey) });
+    return true;
+  }
+
   /** Edit the item list/note on a manual slot (free text or [{qty,name}]). */
   setManualQueueItems(batchKey, items) {
     const orders = [...this.orders.values()].filter(
@@ -1225,7 +1238,7 @@ export class QueueEngine extends EventEmitter {
         buyerId: first.buyerId,
         buyer: this._displayName(first.buyerId, first.buyer),
         orderIds: orders.map((o) => o.id),
-        orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
+        orderNames: orders.map((o) => o.orderName || (String(o.id).startsWith('manual:') ? '' : ('#' + String(o.id)))),
         total: orders.reduce((s, o) => s + (Number(o.total) || 0), 0),
         sourceShort: (() => {
           const s = new Set(orders.map((o) => String(o.source || '').toLowerCase()).filter(Boolean));
@@ -1353,7 +1366,7 @@ export class QueueEngine extends EventEmitter {
         buyer: this._displayName(first.buyerId, first.buyer),
         buyerId: first.buyerId,
         orderIds: orders.map((o) => o.id),
-        orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
+        orderNames: orders.map((o) => o.orderName || (String(o.id).startsWith('manual:') ? '' : ('#' + String(o.id)))),
         itemCount: orders.reduce((n, o) => n + o.items.reduce((m, i) => m + (i.qty || 1), 0), 0),
         total: orders.reduce((s, o) => s + o.total, 0),
         fulfilledAt: Math.max(...orders.map((o) => o.fulfilledAt || 0)),
@@ -1729,7 +1742,7 @@ export class QueueEngine extends EventEmitter {
         buyer: this._displayName(first.buyerId, first.buyer),
         buyerId: first.buyerId,
         orderIds: orders.map((o) => o.id),
-        orderNames: orders.map((o) => o.orderName || ('#' + String(o.id))),
+        orderNames: orders.map((o) => o.orderName || (String(o.id).startsWith('manual:') ? '' : ('#' + String(o.id)))),
         itemCount: orders.reduce((n, o) => n + o.items.reduce((m, i) => m + (i.qty || 1), 0), 0),
         total: orders.reduce((s, o) => s + o.total, 0),
         cancelledAt: Math.max(...orders.map((o) => o.cancelledAt || 0)),

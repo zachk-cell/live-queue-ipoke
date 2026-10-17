@@ -728,7 +728,10 @@
     const out = [];
     for(let i=0;i<n;i++){
       const nm = names[i] && String(names[i]).trim();
-      out.push(nm ? nm : ('#'+shortId(ids[i])));
+      if(nm){ out.push(nm); continue; }
+      const id = String(ids[i]||'');
+      if(id.startsWith('manual:')) continue; // custom add: don't show the internal id as an order #
+      out.push('#'+shortId(id));
     }
     return out;
   }
@@ -775,6 +778,15 @@
     if(!Number.isFinite(pos) || pos < 1) pos = 1;
     try{ await postJSON('/api/manual-order/'+encodeURIComponent(key)+'/position', { position: pos }); }
     catch{ alert("Couldn't move it — check your connection and try again."); }
+  }
+  // Edit a custom (manual) add's order number (blank by default).
+  async function editManualOrderNoUI(key){
+    const slot = (state.queue||[]).find(s=>s.key===key);
+    const current = slot && slot.orderNames && slot.orderNames.length ? String(slot.orderNames.find(n=>n&&n.trim())||'').trim() : '';
+    const raw = window.prompt('Order number for this custom order (leave blank for none):', current);
+    if(raw===null) return;
+    try{ await postJSON('/api/manual-order/'+encodeURIComponent(key)+'/order-name', { orderName: String(raw).trim() }); }
+    catch{ alert("Couldn't save the order number — check your connection and try again."); }
   }
   // Edit a custom (manual) add's items/note.
   async function editManualItemsUI(key){
@@ -1121,7 +1133,8 @@
     if(added.length){
       detailItems += `<div class="dsub">＋ Added since top of queue</div>` + added.map(groupHtml).join('');
     }
-    const detailOrds = `<div class="dord">Order number${orderNoList(e).length>1?'s':''}: ${orderNoList(e).map(n=>esc(n)).join('  ')}</div>`;
+    const _ordList = orderNoList(e);
+    const detailOrds = _ordList.length ? `<div class="dord">Order number${_ordList.length>1?'s':''}: ${_ordList.map(n=>esc(n)).join('  ')}</div>` : '';
     // iPoke-only per-slot extras (source badge + prepped badge + prep/name/combine buttons).
     const perp = !!state.perpetual;
     const srcBadge = (perp && e.sourceShort) ? `<span class="srcbadge ${esc(e.sourceShort)}">${esc(e.sourceShort)}</span>` : '';
@@ -1147,6 +1160,7 @@
     // Custom (manual) adds get position + items editors.
     const manualActions = e.manual ? (
         `<button class="mqbtn" title="Change this custom add's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.pinnedPos||1})">⇅ Pos ${e.pinnedPos||1}</button>`
+      + `<button class="mqbtn" title="Set/edit the order number for this custom add (blank by default)" onclick="editManualOrderNoUI('${e.key}')">＃ Order #</button>`
       + `<button class="mqbtn" title="Edit the items/note on this custom add" onclick="editManualItemsUI('${e.key}')">✎ Items</button>`
     ) : '';
     return `<div class="slotmain">`
