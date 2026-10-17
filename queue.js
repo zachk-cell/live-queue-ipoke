@@ -2569,6 +2569,34 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Mark/unmark an event seat as a WINNER. On mark, appends the seat's display name
+   *  and order number to the event's Winner Note (no manual typing); on unmark, it
+   *  removes that line. Toggle-safe and de-duplicated. */
+  setEventWinner(entryId, on = true) {
+    const e = this.eventEntries.get(String(entryId));
+    if (!e) return false;
+    const ev = this.events.find((x) => x.id === e.eventId);
+    if (!ev) return false;
+    const name = e.nameOverridden ? e.buyer : this._displayName(e.buyerId, e.buyer);
+    const ord = e.orderName || (e.orderId ? ('#' + String(e.orderId)) : '');
+    const line = (ord ? `${name} (${ord})` : String(name || '')).trim();
+    if (!line) return false;
+    const lines = String(ev.note || '').split(/\n+/).map((s) => s.trim()).filter(Boolean);
+    if (on) {
+      e.winner = true;
+      if (!lines.includes(line)) lines.push(line);
+    } else {
+      e.winner = false;
+      const i = lines.indexOf(line);
+      if (i >= 0) lines.splice(i, 1);
+    }
+    ev.note = lines.join('\n');
+    ev.noteAt = ev.note ? Date.now() : null;
+    this._persist();
+    this.emit('change', { reason: 'event-winner', eventId: ev.id, entryId: String(entryId), on: !!on });
+    return true;
+  }
+
   /** Rename a single event seat (admin). Sets the name directly on the entry and
    *  flags it so the per-event roster shows this name verbatim, independent of the
    *  buyer-level name override used by the main queue. Empty name is ignored. */
@@ -2775,6 +2803,7 @@ export class QueueEngine extends EventEmitter {
         createdAt: (e.createdAt >= HOUSE_SEAT_SORT_FIRST) ? null : e.createdAt,
         giveaway: !!e.giveaway,
         houseSeat: !!e.houseSeat,
+        winner: !!e.winner,
         fulfilled: e.status === 'fulfilled',
         fulfilledAt: e.fulfilledAt || null,
         // Oversold if any of this entry's spots land beyond the cap.

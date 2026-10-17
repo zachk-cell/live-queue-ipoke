@@ -449,6 +449,10 @@
   .eqadd{margin-top:6px;background:#161a22;border:1px dashed #3a3f4b;color:#a7b0c2;cursor:pointer;font-size:12px;font-weight:700;padding:6px 10px;border-radius:8px;width:100%}
   .eqadd:hover{color:var(--text);border-color:#4a92ff}
   .eqrow .eqdone.on{background:#173a24;color:#57e0a6;border-color:#2a7048}
+  .eqrow .eqwin{background:#3a2c0c;border:1px solid #6b5120;color:var(--pri);cursor:pointer;font-size:12px;padding:3px 7px;border-radius:7px;flex:none}
+  .eqrow .eqwin:hover{filter:brightness(1.15)}
+  .eqrow .eqwin.on{background:var(--pri);color:#2a1e00;border-color:var(--pri)}
+  .eqrow.winner{background:linear-gradient(90deg, rgba(255,176,32,.14), rgba(255,176,32,0) 70%);border-radius:7px}
   .eqrow.done{opacity:.55}
   .eqrow.done .eqnm{text-decoration:line-through;color:var(--muted)}
   .eexpand{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;margin-top:7px}
@@ -2233,6 +2237,11 @@
     try{ await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/fulfill', { on: on }); }
     catch{ alert("Couldn't update that spot — check your connection and try again."); }
   }
+  // Mark/unmark a seat as the winner — auto-fills the event's Winner Note.
+  async function pickEventWinnerUI(entryId, on){
+    try{ await postJSON('/api/event-entry/'+encodeURIComponent(entryId)+'/winner', { on: on }); }
+    catch{ alert("Couldn't set the winner — check your connection and try again."); }
+  }
   // Manually adjust how many spots a seat holds (e.g. an event change turned
   // someone's 1 spot into 3). Flags the seat as manually adjusted on the admin side.
   async function adjustEventEntrySpotsUI(entryId, current){
@@ -2296,7 +2305,7 @@
     const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,
       e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), (e.note||''), (e.eventNote||''), expandedEvents.has(e.id)?1:0,
-      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
+      expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.winner?'W':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
     if(!force && box._sig===sig) return;
     box._sig = sig;
     const rowHtml = (e)=>{
@@ -2308,7 +2317,10 @@
         : `${e.spotsOrdered} spots ordered`;
       const ripped = e.status==='ripped';
       const entries = (e.entries||[]);
-      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}">
+      // Once every spot is fulfilled, each seat gets a 🏆 button to designate the
+      // winner — it auto-fills the Winner Note with that seat's name + order #.
+      const allFulfilled = e.entryCount>0 && e.unfulfilledCount===0;
+      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}${en.winner?' winner':''}">
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
           ${en.giveaway?'<span class="eqgift" title="Auto giveaway seat (always last) — rename it to the winner">🎁 GIVEAWAY</span>':(en.manual?'<span class="eqmanual" title="Manually added seat">✚</span>':'')}
@@ -2319,6 +2331,7 @@
           ${en.spotsAdjusted?`<span class="eqadj" title="Spots manually adjusted by admin${en.originalSpots!=null?(' (was '+en.originalSpots+', now '+en.spots+')'):''} — check this was intended">⚠ ADJ</span>`:''}
           ${en.source?`<span class="srcbadge ${esc(srcShort(en.source))}">${esc(srcShort(en.source))}</span>`:''}
           ${en.fulfilled&&en.fulfilledAt?`<span class="eqtime" title="Spot marked completed (PST)">✓ ${esc(fmtPST(en.fulfilledAt))}</span>`:''}
+          ${allFulfilled?`<button class="eqwin${en.winner?' on':''}" title="${en.winner?'Winner — click to remove from the Winner Note':'Mark as the winner — adds their name + order # to the Winner Note'}" onclick="pickEventWinnerUI('${en.id}',${en.winner?'false':'true'})">🏆</button>`:''}
           <button class="eqdone${en.fulfilled?' on':''}" title="${en.fulfilled?'Undo — mark not fulfilled':'Mark this spot fulfilled'}" onclick="fulfillEventEntryUI('${en.id}',${en.fulfilled?'false':'true'})">${en.fulfilled?'✓ Done':'Fulfill'}</button>
           <button class="eqspedit" title="Adjust how many spots this seat has" onclick="adjustEventEntrySpotsUI('${en.id}',${Number(en.spots)||1})">±</button>
           <button class="eqedit" title="Rename this seat" onclick="openRenameSeat('${en.id}')">✎</button>

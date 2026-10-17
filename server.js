@@ -442,6 +442,11 @@ app.post('/api/event-entry/:id/fulfill', requireAuth, (req, res) => {
 app.post('/api/event-entry/:id/name', requireAuth, (req, res) => {
   res.json({ ok: queue.setEventEntryBuyer(req.params.id, (req.body && req.body.name) || '') });
 });
+// Mark/unmark an event seat as winner → { on } — auto-fills the event's Winner Note.
+app.post('/api/event-entry/:id/winner', requireAuth, (req, res) => {
+  const on = req.body && req.body.on === false ? false : true;
+  res.json({ ok: queue.setEventWinner(req.params.id, on) });
+});
 // Manually adjust how many spots a single event seat holds → { spots }. Flags the
 // seat as manually adjusted (admin-only) so an unintended change is easy to spot.
 app.post('/api/event-entry/:id/spots', requireAuth, (req, res) => {
