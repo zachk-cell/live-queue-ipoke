@@ -1656,6 +1656,11 @@ export class QueueEngine extends EventEmitter {
    *  AND "shipped sealed" (the store's actual wording), tolerant of a space,
    *  hyphen or underscore between the words. Case-insensitive. */
   _isSealedItem(it) {
+    // TikTok giveaway items (tagged on ingest: the $0 Penny Sleeves Pro Support
+    // accessory) are RIPPED LIVE, not shipped sealed — even though their title
+    // literally says "Shipped Sealed". The giveaway tag overrides the name match
+    // so these route to the rip-live active queue under "TikTok Giveaway".
+    if (it && it.giveaway) return false;
     return /ship(?:ped)?[\s\-_]*sealed/i.test(String((it && it.name) || ''));
   }
 
@@ -2285,7 +2290,7 @@ export class QueueEngine extends EventEmitter {
     return new Set((this.fulfilledEventNames || []).map((r) => r && r.canon).filter(Boolean));
   }
 
-  addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId } = {}) {
+  addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId, auto } = {}) {
     // Idempotent on Shopify variant: if an event for this variant already exists
     // (from an earlier manual add or the periodic auto-sync), don't create a
     // duplicate — return the existing one. Manual events (no sourceVariantId)
@@ -2293,6 +2298,24 @@ export class QueueEngine extends EventEmitter {
     if (sourceVariantId) {
       const dup = this.events.find((e) => e.sourceVariantId && String(e.sourceVariantId) === String(sourceVariantId));
       if (dup) return dup;
+    }
+    // HARD SAFETY NET (root fix for overnight re-adds): the periodic Shopify
+    // auto-sync passes auto:true. If this title was already finished — its canon
+    // is in the fulfilled-name registry OR it still sits in Past Events — never
+    // recreate it. A sold-out event product left listed in the store (or a
+    // re-added copy an admin deleted rather than archived) must not resurrect a
+    // finished event on the next sync cycle. This is independent of the sync's
+    // own candidate filter, so even a filter edge-case can't slip a dup through.
+    if (auto) {
+      const canon = this._canon(title || '');
+      if (canon) {
+        const done = (this.fulfilledEventNames || []).some((r) => r && r.canon === canon)
+          || (this.pastEvents || []).some((p) => p && this._canon(p.title || '') === canon);
+        if (done) {
+          console.log(`[queue] auto-sync skipped already-finished event (dedup guard): ${title}`);
+          return null;
+        }
+      }
     }
     const t = (String(type || '').toLowerCase() === 'wta') ? 'wta' : 'quack';
     const ev = {

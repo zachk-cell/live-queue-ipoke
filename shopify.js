@@ -196,6 +196,18 @@ function isTipItem(name) {
   return String(name == null ? '' : name).trim().toLowerCase() === 'tip';
 }
 
+// The TikTok "giveaway" product: an order for exactly the Penny Sleeves (200ct.)
+// Pro Support accessory, shipped sealed, that comes through at $0. Those are
+// giveaway seats from the live stream, not real sealed purchases — the stream
+// wants them in the rip-live active queue under the name "TikTok Giveaway".
+// Matched loosely on the two distinctive phrases so a renamed/variant title
+// still catches, but the $0 total (checked by the caller) is what confirms it's
+// a giveaway rather than a genuine purchase of the same accessory.
+function isPennySleevesGiveawayItem(name) {
+  const n = String(name == null ? '' : name).toLowerCase();
+  return n.includes('penny sleeves') && n.includes('pro support');
+}
+
 export function normalizeShopifyOrder(o) {
   if (!o) return null;
   const lineItems = (o.lineItems && o.lineItems.nodes) || [];
@@ -223,14 +235,27 @@ export function normalizeShopifyOrder(o) {
   const buyerKey = cust && cust.id
     ? 'shop:' + numericId(cust.id)
     : (cust && cust.email ? 'shop:' + String(cust.email).toLowerCase() : orderId);
+  const total = money(o.currentTotalPriceSet || o.totalPriceSet);
+  // TikTok giveaway: a $0 order that contains the Penny Sleeves Pro Support
+  // accessory. Rename the buyer to "TikTok Giveaway" and tag the matching line
+  // item(s) so the queue engine routes them to the rip-live active queue instead
+  // of Ship-Sealed (see _isSealedItem in queue.js). Only at $0 — a real paid
+  // purchase of the same sleeves keeps its normal name and sealed routing.
+  const isGiveaway = Number(total) === 0
+    && items.some((it) => isPennySleevesGiveawayItem(it.name));
+  if (isGiveaway) {
+    for (const it of items) {
+      if (isPennySleevesGiveawayItem(it.name)) it.giveaway = true;
+    }
+  }
   return {
     id: orderId,
     buyerId: buyerKey,
     // Queue/public label = "First L." (full name never shown publicly).
-    buyer: firstLast(cust, o.name),
+    buyer: isGiveaway ? 'TikTok Giveaway' : firstLast(cust, o.name),
     buyerHandle: '', // Shopify has no @handle.
     items,
-    total: money(o.currentTotalPriceSet || o.totalPriceSet),
+    total,
     createdAt: o.processedAt || o.createdAt ? Date.parse(o.processedAt || o.createdAt) : Date.now(),
     // On-hold badge: TikTok orders sync into Shopify as ON_HOLD by default (the
     // TikTok channel holds fulfillment), so that status is meaningless noise for
@@ -586,9 +611,15 @@ export async function eventSyncCandidates(queue) {
   // A still-listed "sold out" product whose name matches one of these must NOT be
   // re-created — it's a finished event. We surface these separately so the admin
   // can see them (collapsed) without the auto-sync ever re-adding them.
-  const fulfilledSet = new Set(
-    (queue.fulfilledEventNames || []).map((r) => _canonKw((r && (r.title || r.canon)) || '')).filter(Boolean),
-  );
+  // Built from BOTH the fulfilled-name registry AND Past Events titles. Past
+  // Events is the authoritative archive (archiveEvent always pushes there), so
+  // including it means an archived event blocks its product even if the registry
+  // somehow missed the name — the root fix for products that kept re-adding
+  // overnight after their event was archived.
+  const fulfilledSet = new Set([
+    ...(queue.fulfilledEventNames || []).map((r) => _canonKw((r && (r.title || r.canon)) || '')),
+    ...(queue.pastEvents || []).map((p) => _canonKw((p && p.title) || '')),
+  ].filter(Boolean));
   const candidates = [];
   const retired = []; // duplicate-name products still in the store, already fulfilled
   let alreadyLinked = 0;
@@ -600,6 +631,7 @@ export async function eventSyncCandidates(queue) {
     // Already fulfilled under this name → never auto-add; list it as retired.
     if (fulfilledSet.has(cv)) {
       const rec = (queue.fulfilledEventNames || []).find((r) => r && _canonKw((r.title || r.canon) || '') === cv);
+      const past = rec ? null : (queue.pastEvents || []).find((p) => p && _canonKw(p.title || '') === cv);
       retired.push({
         variantId: v.variantId,
         productId: v.productId,
@@ -608,7 +640,7 @@ export async function eventSyncCandidates(queue) {
         type: _inferEventType(v.variantTitle),
         keyword: v.variantTitle,
         available: v.available,
-        fulfilledAt: (rec && rec.at) || null,
+        fulfilledAt: (rec && rec.at) || (past && past.archivedAt) || null,
       });
       continue;
     }
@@ -645,6 +677,7 @@ export async function autoSyncEvents(queue) {
         keywords: [c.keyword],
         sourceVariantId: c.variantId,
         sourceProductId: c.productId,
+        auto: true,
       });
       if (queue.events.length > before) {
         added++;
