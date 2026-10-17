@@ -120,7 +120,7 @@ function firstLast(customer, fallbackName) {
   const l = (customer && customer.lastName || '').trim();
   if (f && l) {
     const two = (l.charAt(0).toUpperCase() + l.slice(1, 2).toLowerCase()).trim();
-    return `${f} ${two}`;
+    return `${f} ${two}.`; // e.g. "Logan Bo." — period after the two-letter last-name stub
   }
   if (f) return f;
   const dn = (customer && customer.displayName || '').trim();

@@ -34,7 +34,7 @@
   }
   html,body{margin:0;padding:0;background:transparent;overflow:hidden;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--red)}
-  #wrap{position:fixed;top:18px;bottom:18px;width:400px;display:flex;flex-direction:column;
+  #wrap{position:fixed;top:18px;bottom:18px;width:290px;display:flex;flex-direction:column;
     transform-origin:top left}
   #wrap.left{left:18px;transform-origin:top left} #wrap.right{right:18px;left:auto;transform-origin:top right}
   /* Thin off-white rounded frame — ALWAYS visible (independent of --bg-alpha) so
@@ -54,6 +54,9 @@
   /* Label + count always stay fully opaque and bold, with strong shadows so they
      read clearly over any video even when the background is fully transparent.
      Only background colors follow --bg-alpha. */
+  /* Name takes the remaining space; the count stays right-aligned so every row's
+     last digit lines up in a column. The gap is kept modest by capping the panel
+     width (#wrap) rather than letting the name stretch across a wide panel. */
   .nm{flex:1;min-width:0;font-weight:800;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
     color:var(--red);text-shadow:var(--txt-outline)}
   .num{font-variant-numeric:tabular-nums;font-weight:900;font-size:22px;min-width:40px;text-align:right;
