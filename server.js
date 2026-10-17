@@ -18,7 +18,7 @@ import { authenticator } from 'otplib';
 
 import { QueueEngine } from './queue.js';
 import { tiktokEnabled, mountAuth, startPolling, tiktokBoot, tiktokStatus, tiktokTokensForEnv, debugShops, refetchShopCipher, debugRawOrder, debugCancellations } from './tiktok.js';
-import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates, fetchOrderShipping } from './shopify.js';
+import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates, fetchOrderShipping, auditVaultOrders } from './shopify.js';
 import { startDiscord, discordEnabled } from './discord.js';
 import { startSimulator } from './simulator.js';
 
@@ -524,6 +524,31 @@ app.get('/api/shopify-scope-check', requireAuth, async (_req, res) => {
 app.get('/api/events-sync/preview', requireAuth, async (_req, res) => {
   try { res.json(await eventSyncCandidates(queue)); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// One-off Shopify reconciliation: tally the vault units that every Shopify order
+// in a window should contribute, vs the live counter. ?hours=18 (default) or
+// ?since=<ISO|ms>, optional ?until=<ISO|ms>. Read-only.
+app.get('/api/vault-audit/shopify', requireAuth, async (req, res) => {
+  try {
+    const parseT = (v) => {
+      if (v == null || v === '') return null;
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 1e11) return n; // ms epoch
+      const d = Date.parse(String(v));
+      return Number.isFinite(d) ? d : null;
+    };
+    const hours = Number(req.query.hours);
+    let sinceMs = parseT(req.query.since);
+    if (sinceMs == null) sinceMs = Date.now() - (Number.isFinite(hours) && hours > 0 ? hours : 18) * 3600 * 1000;
+    const untilMs = parseT(req.query.until);
+    const audit = await auditVaultOrders(queue, { sinceMs, untilMs });
+    // Attach the live counter + ledger pending so the caller can reconcile.
+    const report = queue.vaultLedgerReport();
+    const counters = {};
+    for (const v of report.vaults) counters[v.label] = { counter: v.count, pendingUncounted: v.uncountedSum };
+    res.json({ ...audit, counters });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // Durable vault audit ledger: per-vault counted-vs-expected reconciliation plus

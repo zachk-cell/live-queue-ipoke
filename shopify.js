@@ -305,6 +305,66 @@ async function fetchOrdersMatching(searchQuery, limit = 50) {
 // ISO string for Shopify search syntax, from a JS epoch (ms).
 function iso(ms) { return new Date(ms).toISOString(); }
 
+// One-off reconciliation audit: page through EVERY Shopify order created in a
+// window and tally the vault units they should contribute to the live counter,
+// using the SAME match + sealed-split rules the queue engine uses (so the result
+// is directly comparable to the counter). Read-only; never mutates state.
+//   - Excludes "Ship Sealed" line items (those never rip live → never counted).
+//   - Separates cancelled orders (they must not count) into their own bucket.
+// Returns per-vault totals plus the full order list for inspection.
+export async function auditVaultOrders(queue, { sinceMs, untilMs, max = 3000 } = {}) {
+  if (!shopifyEnabled()) return { ok: false, error: 'shopify not enabled' };
+  let q = `created_at:>='${iso(sinceMs)}'`;
+  if (untilMs) q += ` created_at:<='${iso(untilMs)}'`;
+  let after = null, scanned = 0, pages = 0, hasNext = true;
+  const byVault = {};        // label -> units from LIVE (non-cancelled) rip-live vault orders
+  const byVaultCancelled = {}; // label -> units on cancelled orders (excluded from the count)
+  const orders = [];
+  while (hasNext && scanned < max) {
+    const data = await gql(
+      `query($q:String!,$n:Int!,$after:String){
+         orders(first:$n, query:$q, sortKey:CREATED_AT, after:$after){
+           pageInfo { hasNextPage endCursor }
+           nodes { ${ORDER_FIELDS} }
+         }
+       }`,
+      { q, n: 100, after },
+    );
+    const conn = data && data.orders;
+    if (!conn) break;
+    for (const node of (conn.nodes || [])) {
+      scanned++;
+      const norm = normalizeShopifyOrder(node);
+      if (!norm) continue;
+      // Rip-live items only — drop Ship-Sealed (and giveaway-tagged) line items,
+      // exactly as upsertOrder does, so sealed vaults aren't counted as ripped.
+      const ripItems = (norm.items || []).filter((it) => !queue._isSealedItem(it));
+      const matches = queue._vaultMatches({ items: ripItems });
+      if (!matches.length) continue;
+      const cancelled = !!node.cancelledAt;
+      const perVault = {};
+      for (const m of matches) {
+        perVault[m.label] = (perVault[m.label] || 0) + m.amount;
+        const bucket = cancelled ? byVaultCancelled : byVault;
+        bucket[m.label] = (bucket[m.label] || 0) + m.amount;
+      }
+      orders.push({
+        orderName: norm.orderName, buyer: norm.buyer, total: norm.total,
+        createdAt: norm.createdAt, source: norm.source, cancelled, vaults: perVault,
+      });
+    }
+    pages++;
+    hasNext = !!(conn.pageInfo && conn.pageInfo.hasNextPage);
+    after = conn.pageInfo && conn.pageInfo.endCursor;
+  }
+  orders.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  return {
+    ok: true, sinceIso: iso(sinceMs), untilIso: untilMs ? iso(untilMs) : null,
+    scanned, pages, reachedMax: scanned >= max,
+    byVault, byVaultCancelled, vaultOrderCount: orders.length, orders,
+  };
+}
+
 // ---------------- Poller ----------------
 export function startShopifyPolling(queue) {
   // Perpetual: look back on boot to cover any redeploy gap. Non-perpetual: start
