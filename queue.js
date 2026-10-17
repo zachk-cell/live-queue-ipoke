@@ -78,6 +78,7 @@ export class QueueEngine extends EventEmitter {
     this.trackedVariants = []; // [{ id, label, product, variant }] — per-variant sales counters
     this.variantCounts = {}; // { [variantId]: number } — units counted when a slot hits the top
     this.variantLog = []; // audit trail of manual counter edits/resets (most recent first)
+    this.vaultTallyLog = []; // audit trail of AUTOMATIC vault adds: { ts, order (last 4), vault, amount }
     this.live = false; // when false, incoming orders are ignored (not queued)
     this.sessionStartedAt = null; // when the current live started
     this.history = []; // archived past streams (most recent first)
@@ -172,6 +173,7 @@ export class QueueEngine extends EventEmitter {
         this.trackedVariants = Array.isArray(cfg.trackedVariants) ? cfg.trackedVariants : [];
         this.variantCounts = (cfg.variantCounts && typeof cfg.variantCounts === 'object') ? cfg.variantCounts : {};
         this.variantLog = Array.isArray(cfg.variantLog) ? cfg.variantLog : [];
+        if (Array.isArray(cfg.vaultTallyLog)) this.vaultTallyLog = cfg.vaultTallyLog;
         this.batchCounter = cfg.batchCounter || 0;
         this.live = !!cfg.live;
         this.sessionStartedAt = cfg.sessionStartedAt || null;
@@ -447,6 +449,12 @@ export class QueueEngine extends EventEmitter {
   }
   _tallyVariants(order) {
     if (!this.trackedVariants.length) return 0;
+    // Order's last-4 (digits of its order number, else last 4 of the id) for the adds log.
+    const last4 = (() => {
+      const digits = String(order.orderName || '').replace(/\D/g, '');
+      if (digits) return digits.slice(-4);
+      return String(order.id || '').slice(-4) || '—';
+    })();
     let added = 0;
     for (const it of (order.items || [])) {
       const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
@@ -457,8 +465,13 @@ export class QueueEngine extends EventEmitter {
         const varn = (v.variant || '').toLowerCase();
         if (!varn) continue;
         if ((!prod || text.includes(prod)) && text.includes(varn)) {
-          this.variantCounts[v.id] = (this.variantCounts[v.id] || 0) + perItem * qty;
-          added += perItem * qty;
+          const amount = perItem * qty;
+          const before = this.variantCounts[v.id] || 0;
+          this.variantCounts[v.id] = before + amount;
+          added += amount;
+          // Record the automatic add so the admin can see which order bumped which vault.
+          this.vaultTallyLog.unshift({ ts: Date.now(), order: last4, vault: v.label, amount, to: before + amount });
+          if (this.vaultTallyLog.length > 200) this.vaultTallyLog.length = 200;
         }
       }
     }
@@ -529,6 +542,7 @@ export class QueueEngine extends EventEmitter {
           trackedVariants: this.trackedVariants,
           variantCounts: this.variantCounts,
           variantLog: this.variantLog,
+          vaultTallyLog: this.vaultTallyLog,
           batchCounter: this.batchCounter,
           live: this.live,
           sessionStartedAt: this.sessionStartedAt,
@@ -1532,6 +1546,7 @@ export class QueueEngine extends EventEmitter {
         count: this.variantCounts[v.id] || 0,
       })),
       variantLog: this.variantLog.slice(0, 50),
+      vaultTallyLog: this.vaultTallyLog.slice(0, 50),
       history: this.history.map((s) => ({
         id: s.id,
         label: s.label || null,

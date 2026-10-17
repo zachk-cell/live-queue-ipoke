@@ -1530,6 +1530,7 @@
           <button class="vadd-btn" onclick="addVault(this)">Add ${esc(title)}</button>
         </div>
         <details class="vlogwrap"><summary>▾ Reset / edit log</summary><div class="vlog" id="vlog-list"></div></details>
+        <details class="vlogwrap"><summary>▾ Vault adds log (by order)</summary><div class="vlog" id="vtally-list"></div></details>
       </div>`;
     } else {
       vs.forEach(v=>{
@@ -1540,6 +1541,7 @@
       });
     }
     renderVariantLog();
+    renderVaultTallyLog();
   }
   // ── Drag-to-reorder the Vault list ── posts the reordered full def set to
   // /api/variants (setTrackedVariants keeps each id's live count and the order).
@@ -1641,6 +1643,15 @@
       const isReset = e.action === 'reset';
       return `<div class="lr">${fmtLogTime(e.ts)} · <b>${esc(e.label||e.id)}</b> ${Number(e.from)||0}→${Number(e.to)||0}${isReset?' <span class="rst">(reset)</span>':''}</div>`;
     }).join('');
+  }
+  // Automatic vault adds: which order bumped which vault, and by how much.
+  function renderVaultTallyLog(){
+    const el = document.getElementById('vtally-list'); if(!el) return;
+    const log = state.vaultTallyLog || [];
+    if(!log.length){ el.innerHTML = '<div class="lr">No vault adds yet.</div>'; return; }
+    el.innerHTML = log.map(e=>
+      `<div class="lr">${fmtLogTime(e.ts)} · <b>…${esc(String(e.order||''))}</b> · ${esc(e.vault||'')} <b>+${Number(e.amount)||0}</b>${e.to!=null?` → ${Number(e.to)}`:''}</div>`
+    ).join('');
   }
   async function saveVariant(id, btn){
     const row = btn.closest('.vrow');
