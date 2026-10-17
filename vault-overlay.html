@@ -17,7 +17,11 @@
     /* Background opacity of the whole panel. 0 = fully transparent (default);
        raised by the admin Vault slider. */
     --bg-alpha:0;
-    --card:rgba(22,10,10, calc(var(--bg-alpha) * 0.9));
+    /* Panel background colour (RGB triple). Defaults to the dark vault red; the
+       admin can override it. At 100% opacity the panel is FULLY opaque (no 0.9
+       cap — a slider at 100% means not see-through at all). */
+    --bg-rgb:22,10,10;
+    --card:rgba(var(--bg-rgb), var(--bg-alpha));
     --line:rgba(255,255,255, calc(var(--bg-alpha) * 0.12));
     /* Vault text is RED. Solid dark outline keeps it readable over ANY
        background (dark video, bright video, or a plain white page),
@@ -64,7 +68,6 @@
     <div class="head">
       <span class="vault-ico">🔴</span>
       <span class="title" id="title">Vault</span>
-      <span class="count" id="count"></span>
     </div>
     <div class="list" id="list"></div>
     <div class="more" id="more"></div>
@@ -84,12 +87,27 @@
   // Background, border and scale are driven LIVE from the admin panel (Overlay
   // 2 = Vault), pushed over the socket. `panel` toggles the background AND the
   // off-white border together; the red text is never affected.
+  function hexToRgb(hex){
+    const m = String(hex||'').trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if(!m) return null;
+    let h = m[1];
+    if(h.length===3) h = h.split('').map(c=>c+c).join('');
+    const n = parseInt(h,16);
+    return `${(n>>16)&255},${(n>>8)&255},${n&255}`;
+  }
   function applySettings(s){
     s = s || {};
     const panel = s.panel !== false;
     const op = clamp01(Number(s.opacity) || 0);
     const scale = clampScale(Number(s.scale) || 1);
-    document.documentElement.style.setProperty('--bg-alpha', panel ? op : 0);
+    const root = document.documentElement.style;
+    root.setProperty('--bg-alpha', panel ? op : 0);
+    // Admin-chosen colours (blank = revert to the overlay's default red/dark).
+    const bg = hexToRgb(s.bgColor);
+    if(bg) root.setProperty('--bg-rgb', bg); else root.removeProperty('--bg-rgb');
+    const tc = (typeof s.textColor==='string' && /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(s.textColor.trim())) ? s.textColor.trim() : '';
+    if(tc){ root.setProperty('--red', tc); root.setProperty('--red-soft', tc); root.setProperty('--red-deep', tc); }
+    else { root.removeProperty('--red'); root.removeProperty('--red-soft'); root.removeProperty('--red-deep'); }
     const p = document.getElementById('panel');
     if(p){
       p.style.border = panel ? '' : 'none';        // '' reverts to the CSS off-white frame
@@ -127,15 +145,11 @@
     const list = document.getElementById('list');
     const moreEl = document.getElementById('more');
     const titleEl = document.getElementById('title');
-    const countEl = document.getElementById('count');
 
     const tracker = state.tracker || {};
     titleEl.textContent = TITLE || tracker.title || 'Vault';
 
     const variants = (state.variants || []);
-    const total = variants.reduce((a,v)=>a + (Number(v.count)||0), 0);
-    countEl.textContent = total ? (total + (total===1?' pack':' packs')) : '';
-
     const rows = variants.slice(0, ROWS);
     list.innerHTML = rows.length ? rows.map((v)=>`
       <div class="row">

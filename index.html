@@ -130,6 +130,7 @@
   .ov-sec input[type=range]{width:100%;accent-color:var(--accent);margin:2px 0 2px}
   .ov-sec .ov-check{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--text);font-size:13px;cursor:pointer}
   .ov-sec .ov-check input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+  .ov-sec .ov-color{width:100%;height:34px;padding:2px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;cursor:pointer;margin-bottom:4px}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .chip{background:var(--pri-bg);color:var(--pri);border:1px solid var(--pri);border-radius:20px;padding:3px 10px;font-size:12px}
   .livebadge{font-size:10px;font-weight:800;letter-spacing:.6px;padding:3px 8px;border-radius:20px;
@@ -564,7 +565,16 @@
       <input id="ov-vault-scale" type="range" min="50" max="200" step="1" value="100" />
       <label>Background transparency <span id="ov-vault-opVal" class="ov-val">0%</span></label>
       <input id="ov-vault-op" type="range" min="0" max="100" step="1" value="0" />
+      <div class="ov-hint">At 100% the background is fully solid (not see-through).</div>
       <label class="ov-check"><input id="ov-vault-panel" type="checkbox" checked /> Show background &amp; border</label>
+      <label class="ov-check"><input id="ov-vault-customcolors" type="checkbox" /> Custom colors</label>
+      <div id="ov-vault-colors" style="display:none">
+        <label>Text color</label>
+        <input id="ov-vault-textColor" type="color" class="ov-color" value="#ff3b3b" />
+        <label>Background color</label>
+        <input id="ov-vault-bgColor" type="color" class="ov-color" value="#160a0a" />
+        <div class="ov-hint">Background color shows at the transparency set above. Uncheck “Custom colors” to return to the default red / dark.</div>
+      </div>
     </div>
 
     <div class="row">
@@ -2252,7 +2262,24 @@
       if(cb){ cb.checked = panel; }
       const sp = document.getElementById('ov-'+k+'-speed');
       if(sp && document.activeElement !== sp){ const spv = s.speed!=null?Math.round(Number(s.speed)):26; sp.value = spv; document.getElementById('ov-'+k+'-speedVal').textContent = spv+' px/s'; }
+      // Custom colors (vault). Shown only when the server has a custom color set.
+      const ccb = document.getElementById('ov-'+k+'-customcolors');
+      if(ccb){
+        const hasCustom = !!(s.textColor || s.bgColor);
+        if(document.activeElement !== ccb) ccb.checked = hasCustom;
+        const box = document.getElementById('ov-'+k+'-colors'); if(box) box.style.display = ccb.checked ? '' : 'none';
+        const tcEl = document.getElementById('ov-'+k+'-textColor');
+        if(tcEl && document.activeElement !== tcEl && s.textColor) tcEl.value = _hex6(s.textColor);
+        const bgEl = document.getElementById('ov-'+k+'-bgColor');
+        if(bgEl && document.activeElement !== bgEl && s.bgColor) bgEl.value = _hex6(s.bgColor);
+      }
     }
+  }
+  // Normalize a #rgb / #rrggbb string to the 6-digit form a <input type=color> needs.
+  function _hex6(h){
+    h = String(h||'').trim().replace(/^#/,'');
+    if(/^[0-9a-f]{3}$/i.test(h)) h = h.split('').map(c=>c+c).join('');
+    return /^[0-9a-f]{6}$/i.test(h) ? ('#'+h) : '#000000';
   }
 
   // Debounced push of one overlay's current control values to the server.
@@ -2263,6 +2290,13 @@
     const patch = { which: k, scale, opacity, panel };
     const spEl = document.getElementById('ov-'+k+'-speed');
     if(spEl) patch.speed = Number(spEl.value);
+    const ccb = document.getElementById('ov-'+k+'-customcolors');
+    if(ccb){
+      if(ccb.checked){
+        patch.textColor = document.getElementById('ov-'+k+'-textColor').value;
+        patch.bgColor = document.getElementById('ov-'+k+'-bgColor').value;
+      } else { patch.textColor = ''; patch.bgColor = ''; } // revert to overlay default
+    }
     clearTimeout(_ovSend[k]);
     _ovSend[k] = setTimeout(() => {
       postJSON('/api/overlay-setting', patch);
@@ -2280,6 +2314,12 @@
       cb.addEventListener('change', () => pushOverlay(k));
       const sp = document.getElementById('ov-'+k+'-speed');
       if(sp) sp.addEventListener('input', () => { document.getElementById('ov-'+k+'-speedVal').textContent = sp.value+' px/s'; pushOverlay(k); });
+      const ccb = document.getElementById('ov-'+k+'-customcolors');
+      if(ccb){
+        ccb.addEventListener('change', () => { const box=document.getElementById('ov-'+k+'-colors'); if(box) box.style.display = ccb.checked?'':'none'; pushOverlay(k); });
+        const tcEl = document.getElementById('ov-'+k+'-textColor'); if(tcEl) tcEl.addEventListener('input', () => pushOverlay(k));
+        const bgEl = document.getElementById('ov-'+k+'-bgColor'); if(bgEl) bgEl.addEventListener('input', () => pushOverlay(k));
+      }
     }
     const modal = document.getElementById('ovModal');
     if(modal) modal.addEventListener('click', (e)=>{ if(e.target === modal) closeOverlaySliders(); });

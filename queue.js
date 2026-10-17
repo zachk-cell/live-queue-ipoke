@@ -130,8 +130,8 @@ export class QueueEngine extends EventEmitter {
     // the Vault (pack-count) board. opacity 0..1 (background), scale 0.5..3,
     // panel = show background + border (single toggle).
     this.overlays = {
-      queue: { opacity: 0, scale: 1, panel: true, speed: 26 },
-      vault: { opacity: 0, scale: 1, panel: true, speed: 26 },
+      queue: { opacity: 0, scale: 1, panel: true, speed: 26, textColor: '', bgColor: '' },
+      vault: { opacity: 0, scale: 1, panel: true, speed: 26, textColor: '', bgColor: '' },
     };
     // Pacific-day marker for the daily "Past Days" rollover.
     this.lastRolloverDay = null;
@@ -1912,6 +1912,10 @@ export class QueueEngine extends EventEmitter {
     // Reel auto-scroll speed (px/sec) — only meaningful for the queue overlay in
     // ?reel=1 mode, but stored generically so the admin slider can push it live.
     if (patch.speed != null && Number.isFinite(Number(patch.speed))) s.speed = Math.max(2, Math.min(200, Number(patch.speed)));
+    // Optional custom colours (hex like #ff3b3b or #f33; '' clears → overlay default).
+    const isHex = (v) => typeof v === 'string' && /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(v.trim());
+    if (patch.textColor != null) s.textColor = isHex(patch.textColor) ? patch.textColor.trim() : '';
+    if (patch.bgColor != null) s.bgColor = isHex(patch.bgColor) ? patch.bgColor.trim() : '';
     this._persist();
     this.emit('change', { reason: 'overlay-setting', which });
     return true;
