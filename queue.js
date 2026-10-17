@@ -25,6 +25,7 @@ const SEALED_FILE = path.join(DATA_DIR, 'sealed-state.json'); // iPoke: Ship-Sea
 const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
 const PAST_EVENTS_MAX = 200; // keep the most recent N archived events
 const PRIORITY_DOLLARS = 1000; // an order (or combined batch) at/above this $ skips the queue
+const AGED_QUEUE_MS = 14 * 60 * 60 * 1000; // after this long in queue, a slot ranks ABOVE incoming priority (fairness for long waiters)
 const GIVEAWAY_SORT_TS = 8640000000000000; // sentinel createdAt so the giveaway seat always sorts LAST
 // House seats (Nikki + Greg) ride just BEFORE the giveaway on (Omega) quacks —
 // always the last two before it. Real/manual seats use normal (much smaller)
@@ -1397,11 +1398,18 @@ export class QueueEngine extends EventEmitter {
     const entries = [...keys].map((k) => this._entryFor(k)).filter(Boolean);
     const pinned = entries.filter((e) => e.pinnedPos != null && !e.bumped);
     const rest = entries.filter((e) => e.pinnedPos == null || e.bumped);
+    // A slot that's been waiting more than 14h ranks ABOVE incoming priority — so a
+    // fresh priority order can't keep burying someone who's already waited that long.
+    const now = Date.now();
+    const isAged = (e) => (now - (e.firstOrderAt || now)) > AGED_QUEUE_MS;
     rest.sort((a, b) => {
-      if (a.bumped !== b.bumped) return a.bumped ? -1 : 1;
-      if (a.isPriority !== b.isPriority) return a.isPriority ? -1 : 1;
-      if (a.isPriority) return a.priorityAt - b.priorityAt;
-      return a.firstOrderAt - b.firstOrderAt;
+      if (a.bumped !== b.bumped) return a.bumped ? -1 : 1;          // manual bump always first
+      const aa = isAged(a), ab = isAged(b);
+      if (aa !== ab) return aa ? -1 : 1;                            // 14h+ waiters next
+      if (aa && ab) return a.firstOrderAt - b.firstOrderAt;         // among aged: longest wait first
+      if (a.isPriority !== b.isPriority) return a.isPriority ? -1 : 1; // then priority
+      if (a.isPriority) return a.priorityAt - b.priorityAt;        //   priority tier by time
+      return a.firstOrderAt - b.firstOrderAt;                       // then normal by time
     });
     // Pinned slots keep their relative order (lower pinnedPos first; ties by pin time)
     // and sit as one contiguous block at the TOP, above every non-pinned slot. This
