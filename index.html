@@ -244,6 +244,11 @@
   .vlog .lr:first-child{border-top:none}
   .vlog .lr b{color:#e8ebf2}
   .vlog .lr .rst{color:#ff9b9b;font-weight:700}
+  .vlog .lr .ok{color:#43e08a;font-weight:700}
+  .vlog .lr .muted{color:#6b7385}
+  .vrecon-actions{margin-top:8px}
+  .vrecon-btn{font-size:11px;padding:5px 9px;border-radius:7px;border:1px solid #2a3140;background:#1a2230;color:#cdd4e2;cursor:pointer}
+  .vrecon-btn:hover{background:#222c3d}
 
   /* ── iPoke: source badge, prep, events, combining (only shown when perpetual) ── */
   .srcbadge{font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:6px;flex:none}
@@ -1535,6 +1540,13 @@
         </div>
         <details class="vlogwrap"><summary>▾ Reset / edit log</summary><div class="vlog" id="vlog-list"></div></details>
         <details class="vlogwrap"><summary>▾ Vault adds log (by order)</summary><div class="vlog" id="vtally-list"></div></details>
+        <details class="vlogwrap"><summary>▾ Vault reconciliation &amp; audit</summary>
+          <div class="vlog" id="vrecon-list"></div>
+          <div class="vrecon-actions">
+            <button class="vrecon-btn" onclick="loadVaultLedger()">Check for missed vault orders</button>
+          </div>
+          <div class="vlog" id="vmiss-list"></div>
+        </details>
       </div>`;
     } else {
       vs.forEach(v=>{
@@ -1546,6 +1558,7 @@
     }
     renderVariantLog();
     renderVaultTallyLog();
+    renderVaultRecon();
   }
   // ── Drag-to-reorder the Vault list ── posts the reordered full def set to
   // /api/variants (setTrackedVariants keeps each id's live count and the order).
@@ -1656,6 +1669,41 @@
     el.innerHTML = log.map(e=>
       `<div class="lr">${fmtLogTime(e.ts)} · <b>…${esc(String(e.order||''))}</b> · ${esc(e.vault||'')} <b>+${Number(e.amount)||0}</b>${e.to!=null?` → ${Number(e.to)}`:''}</div>`
     ).join('');
+  }
+  // Live reconciliation summary (from the snapshot's vaultAudit): per vault, the
+  // displayed counter vs what the durable ledger says was actually counted and
+  // what was expected — plus a loud flag if any fulfilled vault order never counted.
+  function renderVaultRecon(){
+    const el = document.getElementById('vrecon-list'); if(!el) return;
+    const a = state.vaultAudit;
+    if(!a || !(a.vaults||[]).length){ el.innerHTML = '<div class="lr">No vault orders tracked yet.</div>'; return; }
+    const rows = a.vaults.map(v=>{
+      const counter = Number(v.count)||0, counted = Number(v.countedSum)||0, expected = Number(v.expectedSum)||0, miss = Number(v.missSum)||0;
+      const manualGap = counter - counted; // counter higher than auto-counted = manual adds / pre-ledger
+      const bits = [];
+      if(miss>0) bits.push(`<span class="rst">⚠ ${miss} on shipped orders NOT counted</span>`);
+      if(manualGap>0) bits.push(`<span class="muted">+${manualGap} manual / pre-ledger</span>`);
+      return `<div class="lr"><b>${esc(v.label)}</b>: counter ${counter} · ledger counted ${counted} / expected ${expected}${bits.length?' · '+bits.join(' · '):''}</div>`;
+    }).join('');
+    const note = a.potentialMissCount>0
+      ? `<div class="lr"><span class="rst">⚠ ${a.potentialMissCount} shipped vault order(s) look uncounted — click below for detail.</span></div>`
+      : `<div class="lr"><span class="ok">✓ No shipped vault orders are uncounted.</span></div>`;
+    el.innerHTML = rows + note + `<div class="lr muted">${Number(a.totalOrders)||0} vault orders in ledger · ${Number(a.pendingCount)||0} still queued (will count at top/fulfill).</div>`;
+  }
+  // Pull the full durable ledger from /api/vault-ledger and list the potential
+  // misses (fulfilled vault orders with no count) so they can be investigated.
+  async function loadVaultLedger(){
+    const el = document.getElementById('vmiss-list'); if(!el) return;
+    el.innerHTML = '<div class="lr">Loading…</div>';
+    try{
+      const r = await fetch('/api/vault-ledger').then(r=>r.json());
+      const misses = r.potentialMisses || [];
+      if(!misses.length){ el.innerHTML = '<div class="lr"><span class="ok">✓ No fulfilled vault orders are missing a count.</span></div>'; return; }
+      el.innerHTML = `<div class="lr"><b>${misses.length} fulfilled vault order(s) with no count:</b></div>` + misses.map(e=>{
+        const vaults = (e.vaults||[]).map(v=>`${esc(v.label)} +${Number(v.amount)||0}`).join(', ');
+        return `<div class="lr"><b>${esc(e.orderName||e.orderId)}</b> · ${esc(e.buyer||'')} · ${vaults}</div>`;
+      }).join('');
+    }catch{ el.innerHTML = '<div class="lr"><span class="rst">Could not load the ledger — check your connection.</span></div>'; }
   }
   async function saveVariant(id, btn){
     const row = btn.closest('.vrow');

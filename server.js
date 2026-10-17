@@ -526,6 +526,22 @@ app.get('/api/events-sync/preview', requireAuth, async (_req, res) => {
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Durable vault audit ledger: per-vault counted-vs-expected reconciliation plus
+// the full per-order detail (and fulfilled-but-uncounted "potential miss" list).
+// Optional ?since=<ms epoch> limits the entries/misses to orders first seen on or
+// after that time (the per-vault totals always cover the whole ledger).
+app.get('/api/vault-ledger', requireAuth, (req, res) => {
+  try {
+    const r = queue.vaultLedgerReport();
+    const since = Number(req.query.since);
+    if (Number.isFinite(since) && since > 0) {
+      r.entries = r.entries.filter((e) => (e.firstSeenAt || 0) >= since);
+      r.potentialMisses = r.potentialMisses.filter((e) => (e.firstSeenAt || 0) >= since);
+    }
+    res.json(r);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Inject a synthetic order for testing label printing / the panel. Admin only.
 // Optional query: ?buyer=name&n=1&item=Test%20Pack&total=9.99&buyerId=custom
 // buyerId lets you simulate two DIFFERENT buyers who share a display name.

@@ -24,6 +24,8 @@ const EVENTS_FILE = path.join(DATA_DIR, 'events-state.json'); // iPoke: event en
 const SEALED_FILE = path.join(DATA_DIR, 'sealed-state.json'); // iPoke: Ship-Sealed side-queue (internal pack/ship)
 const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
 const PAST_EVENTS_MAX = 200; // keep the most recent N archived events
+const VAULT_LEDGER_FILE = path.join(DATA_DIR, 'vault-ledger.json'); // iPoke: durable per-order vault audit ledger
+const VAULT_LEDGER_MAX = 5000; // keep the most recent N vault orders (bounded, survives rollover)
 const PRIORITY_DOLLARS = 1000; // an order (or combined batch) at/above this $ skips the queue
 const AGED_QUEUE_MS = 14 * 60 * 60 * 1000; // after this long in queue, a slot ranks ABOVE incoming priority (fairness for long waiters)
 const GIVEAWAY_SORT_TS = 8640000000000000; // sentinel createdAt so the giveaway seat always sorts LAST
@@ -80,6 +82,13 @@ export class QueueEngine extends EventEmitter {
     this.variantCounts = {}; // { [variantId]: number } — units counted when a slot hits the top
     this.variantLog = []; // audit trail of manual counter edits/resets (most recent first)
     this.vaultTallyLog = []; // audit trail of AUTOMATIC vault adds: { ts, order (last 4), vault, amount }
+    // Durable per-order vault audit LEDGER, keyed by order id. Observational only
+    // (never changes counting): records every rip-live order that matches a tracked
+    // vault — its items, the vaults + expected amounts it should contribute, and
+    // whether/when/how (top vs grace) it was actually counted. Persists in its own
+    // file so it survives fulfillment, the nightly rollover and restarts, making the
+    // vault counter fully reconcilable (and manual corrections unnecessary).
+    this.vaultLedger = {}; // { [orderId]: { orderId, orderName, buyer, source, items, vaults, expected, counted, countedAt, path, status, firstSeenAt, lastSeenAt } }
     this.live = false; // when false, incoming orders are ignored (not queued)
     this.sessionStartedAt = null; // when the current live started
     this.history = []; // archived past streams (most recent first)
@@ -154,6 +163,9 @@ export class QueueEngine extends EventEmitter {
     // (#8) Pull Ship-Sealed items out of orders that were queued before the
     // Ship-Sealed split existed, so they land in the Ship-Sealed queue retroactively.
     try { this.sweepQueuedIntoSealed(); } catch (e) { console.warn('[queue] sealed sweep failed:', e.message); }
+    // Seed the durable vault audit ledger from orders already in memory, so it's
+    // populated on first deploy and after every restart (not just new orders).
+    try { this._backfillVaultLedger(); } catch (e) { console.warn('[queue] vault ledger backfill failed:', e.message); }
   }
 
   /** Resolve the display name for a buyer, honouring a manual override. */
@@ -232,6 +244,14 @@ export class QueueEngine extends EventEmitter {
       }
     } catch (e) {
       console.warn('[queue] could not load past events:', e.message);
+    }
+    try {
+      if (fs.existsSync(VAULT_LEDGER_FILE)) {
+        const obj = JSON.parse(fs.readFileSync(VAULT_LEDGER_FILE, 'utf8'));
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) this.vaultLedger = obj;
+      }
+    } catch (e) {
+      console.warn('[queue] could not load vault ledger:', e.message);
     }
     // Retroactively seed the fulfilled-name registry from events that already
     // finished before this guard existed (archived → pastEvents, or still on the
@@ -382,29 +402,47 @@ export class QueueEngine extends EventEmitter {
    *  `vaultCounted` flag is the single source of truth shared by BOTH count paths
    *  (reaching the top, and the fulfill-grace sweep), so an order can never add to
    *  the vault twice — no matter how it gets counted or how often it re-tops. */
-  _countVaultOnce(order) {
+  _countVaultOnce(order, path = 'top') {
     if (order.vaultCounted) return false;
     const added = this._tallyVariants(order);
     // Only lock the order as "counted" once it ACTUALLY matched a tracked vault. If
     // nothing matched (e.g. a vault keyword wasn't set up yet when the order first
     // reached the top), leave it un-counted so it still gets picked up later — when
     // the keyword is added — by the next top-reach or the fulfill-grace sweep.
-    if (added > 0) { order.vaultCounted = true; return true; }
+    if (added > 0) {
+      order.vaultCounted = true;
+      this._markVaultCounted(order, path); // audit ledger: who/when/how it counted
+      return true;
+    }
     return false;
+  }
+
+  /** Pure match: the tracked vaults an order's items hit, with per-match amounts.
+   *  ONE definition of "what counts" shared by _orderHasVault, _tallyVariants and
+   *  the audit ledger, so the flag, the counter and the audit can never disagree.
+   *  Returns [] for a non-vault order (no side effects). */
+  _vaultMatches(order) {
+    const res = [];
+    if (!this.trackedVariants.length) return res;
+    for (const it of (order.items || [])) {
+      const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
+      const qty = it.qty || 1;
+      const perItem = this._vaultUnitsPerItem(it);
+      for (const v of this.trackedVariants) {
+        const prod = (v.product || '').toLowerCase();
+        const varn = (v.variant || '').toLowerCase();
+        if (!varn) continue;
+        if ((!prod || text.includes(prod)) && text.includes(varn)) {
+          res.push({ id: v.id, label: v.label, amount: perItem * qty, item: it.name || '' });
+        }
+      }
+    }
+    return res;
   }
 
   /** True if any of an order's items match a tracked (vault) variant. */
   _orderHasVault(order) {
-    if (!this.trackedVariants.length) return false;
-    for (const it of (order.items || [])) {
-      const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
-      for (const v of this.trackedVariants) {
-        const prod = (v.product || '').toLowerCase();
-        const varn = (v.variant || '').toLowerCase();
-        if (varn && (!prod || text.includes(prod)) && text.includes(varn)) return true;
-      }
-    }
-    return false;
+    return this._vaultMatches(order).length > 0;
   }
 
   /** Fulfill-grace sweep: a vault order fulfilled WITHOUT ever reaching the top
@@ -421,7 +459,7 @@ export class QueueEngine extends EventEmitter {
       if (o.status !== 'fulfilled' || o.vaultCounted) continue;
       if (!o.fulfilledAt || (now - o.fulfilledAt) < VAULT_FULFILL_GRACE_MS) continue;
       if (!this._orderHasVault(o)) continue;
-      if (this._countVaultOnce(o)) counted++;
+      if (this._countVaultOnce(o, 'grace')) counted++;
     }
     if (counted) {
       this._persist();
@@ -449,7 +487,8 @@ export class QueueEngine extends EventEmitter {
     return m ? Math.max(1, parseInt(m[1], 10)) : 1;
   }
   _tallyVariants(order) {
-    if (!this.trackedVariants.length) return 0;
+    const matches = this._vaultMatches(order);
+    if (!matches.length) return 0;
     // Order's last-4 (digits of its order number, else last 4 of the id) for the adds log.
     const last4 = (() => {
       const digits = String(order.orderName || '').replace(/\D/g, '');
@@ -457,26 +496,123 @@ export class QueueEngine extends EventEmitter {
       return String(order.id || '').slice(-4) || '—';
     })();
     let added = 0;
-    for (const it of (order.items || [])) {
-      const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
-      const qty = it.qty || 1;
-      const perItem = this._vaultUnitsPerItem(it);
-      for (const v of this.trackedVariants) {
-        const prod = (v.product || '').toLowerCase();
-        const varn = (v.variant || '').toLowerCase();
-        if (!varn) continue;
-        if ((!prod || text.includes(prod)) && text.includes(varn)) {
-          const amount = perItem * qty;
-          const before = this.variantCounts[v.id] || 0;
-          this.variantCounts[v.id] = before + amount;
-          added += amount;
-          // Record the automatic add so the admin can see which order bumped which vault.
-          this.vaultTallyLog.unshift({ ts: Date.now(), order: last4, vault: v.label, amount, to: before + amount });
-          if (this.vaultTallyLog.length > 200) this.vaultTallyLog.length = 200;
+    for (const m of matches) {
+      const before = this.variantCounts[m.id] || 0;
+      this.variantCounts[m.id] = before + m.amount;
+      added += m.amount;
+      // Record the automatic add so the admin can see which order bumped which vault.
+      this.vaultTallyLog.unshift({ ts: Date.now(), order: last4, vault: m.label, amount: m.amount, to: before + m.amount });
+      if (this.vaultTallyLog.length > 200) this.vaultTallyLog.length = 200;
+    }
+    return added;
+  }
+
+  /** Audit ledger: record (or refresh) a rip-live order that matches a tracked
+   *  vault. Observational only — never changes any counter. Captures the order's
+   *  items, the vaults + expected amounts it should contribute, and its current
+   *  status, so a fulfilled-but-uncounted vault order is visible as a potential
+   *  miss. Called at ingest and whenever the order's status changes. Preserves any
+   *  prior counted/countedAt/path already observed. */
+  _recordVaultOrder(order) {
+    if (!order || !this.trackedVariants.length) return;
+    const matches = this._vaultMatches(order);
+    if (!matches.length) return; // not a vault order — nothing to track
+    const id = String(order.id);
+    const now = Date.now();
+    const prev = this.vaultLedger[id] || {};
+    const byVault = {};
+    for (const m of matches) byVault[m.id] = (byVault[m.id] || 0) + m.amount;
+    const expectedTotal = matches.reduce((n, m) => n + m.amount, 0);
+    this.vaultLedger[id] = {
+      orderId: id,
+      orderName: order.orderName || '',
+      buyer: order.buyer || '',
+      source: order.source || '',
+      items: (order.items || []).map((it) => ({ name: it.name || '', qty: it.qty || 1 })),
+      vaults: matches.map((m) => ({ id: m.id, label: m.label, amount: m.amount, item: m.item })),
+      expected: { total: expectedTotal, byVault },
+      // counted reflects the live order flag; once observed true it stays true.
+      counted: !!(prev.counted || order.vaultCounted),
+      countedAt: prev.countedAt || null,
+      path: prev.path || null,
+      status: order.status || 'queued',
+      firstSeenAt: prev.firstSeenAt || now,
+      lastSeenAt: now,
+    };
+    this._pruneVaultLedger();
+    this._persistVaultLedger();
+  }
+
+  /** Mark a ledger entry as counted, stamping when and by which path (top-of-queue
+   *  vs fulfill-grace sweep). Ensures the entry exists first. */
+  _markVaultCounted(order, path) {
+    if (!order) return;
+    const id = String(order.id);
+    if (!this.vaultLedger[id]) this._recordVaultOrder(order);
+    const e = this.vaultLedger[id];
+    if (!e) return;
+    e.counted = true;
+    e.countedAt = Date.now();
+    e.path = path || e.path || 'top';
+    e.status = order.status || e.status;
+    e.lastSeenAt = Date.now();
+    this._persistVaultLedger();
+  }
+
+  /** Reconciliation report over the durable ledger. Per tracked vault: the live
+   *  counter, the sum actually counted and the sum expected from ledgered orders,
+   *  plus how much is uncounted and how much of THAT is on fulfilled orders (the
+   *  real "miss" signal — a vault order that shipped but never counted). Also lists
+   *  those potential-miss orders. Queued-not-yet-topped orders show as uncounted
+   *  but NOT as misses (they count correctly once they reach the top). */
+  vaultLedgerReport() {
+    const entries = Object.values(this.vaultLedger)
+      .sort((a, b) => (b.firstSeenAt || 0) - (a.firstSeenAt || 0));
+    const byVault = {};
+    for (const v of this.trackedVariants) {
+      byVault[v.id] = {
+        id: v.id, label: v.label, count: this.variantCounts[v.id] || 0,
+        countedSum: 0, expectedSum: 0, uncountedSum: 0, missSum: 0, orders: 0,
+      };
+    }
+    for (const e of entries) {
+      for (const vb of (e.vaults || [])) {
+        const b = byVault[vb.id];
+        if (!b) continue;
+        b.orders += 1;
+        b.expectedSum += vb.amount;
+        if (e.counted) b.countedSum += vb.amount;
+        else {
+          b.uncountedSum += vb.amount;
+          if (e.status === 'fulfilled') b.missSum += vb.amount;
         }
       }
     }
-    return added;
+    const potentialMisses = entries.filter((e) => !e.counted && e.status === 'fulfilled');
+    const pending = entries.filter((e) => !e.counted && e.status !== 'fulfilled');
+    return {
+      vaults: Object.values(byVault),
+      totalOrders: entries.length,
+      potentialMisses,
+      pendingCount: pending.length,
+      entries,
+    };
+  }
+
+  /** Lean reconciliation summary for the live snapshot (no per-order entries):
+   *  per-vault counted vs expected and the number of potential-miss orders. */
+  _vaultAuditSummary() {
+    const r = this.vaultLedgerReport();
+    return {
+      vaults: r.vaults.map((v) => ({
+        id: v.id, label: v.label, count: v.count,
+        countedSum: v.countedSum, expectedSum: v.expectedSum,
+        missSum: v.missSum, uncountedSum: v.uncountedSum,
+      })),
+      potentialMissCount: r.potentialMisses.length,
+      pendingCount: r.pendingCount,
+      totalOrders: r.totalOrders,
+    };
   }
 
   /** Replace the tracked-variant DEFINITIONS (admin editor). Preserves the live
@@ -587,6 +723,28 @@ export class QueueEngine extends EventEmitter {
       this._atomicWrite(PAST_EVENTS_FILE, JSON.stringify(this.pastEvents));
     } catch (e) {
       console.warn('[queue] past-events persist failed:', e.message);
+    }
+  }
+
+  /** Keep the vault ledger bounded: retain the most recent VAULT_LEDGER_MAX orders
+   *  by first-seen time (plenty for months of streams). */
+  _pruneVaultLedger() {
+    const ids = Object.keys(this.vaultLedger);
+    if (ids.length <= VAULT_LEDGER_MAX) return;
+    const sorted = ids
+      .map((id) => this.vaultLedger[id])
+      .sort((a, b) => (b.firstSeenAt || 0) - (a.firstSeenAt || 0))
+      .slice(0, VAULT_LEDGER_MAX);
+    const keep = {};
+    for (const e of sorted) keep[e.orderId] = e;
+    this.vaultLedger = keep;
+  }
+
+  _persistVaultLedger() {
+    try {
+      this._atomicWrite(VAULT_LEDGER_FILE, JSON.stringify(this.vaultLedger));
+    } catch (e) {
+      console.warn('[queue] vault-ledger persist failed:', e.message);
     }
   }
 
@@ -886,6 +1044,7 @@ export class QueueEngine extends EventEmitter {
       afterTopOf: afterTopOf || null,
     };
     this.orders.set(id, order);
+    this._recordVaultOrder(order); // durable vault audit ledger (observational)
     this._markTopReached();
     this._persist();
 
@@ -1059,6 +1218,7 @@ export class QueueEngine extends EventEmitter {
       o.status = 'fulfilled';
       o.fulfilledAt = now;
       o.bumped = false;
+      this._recordVaultOrder(o); // refresh ledger status (→ fulfilled) for miss detection
     }
     if (this.openBatch.get(buyerId) === batchKey) this.openBatch.delete(buyerId);
     this.preppedBatches.delete(batchKey);
@@ -1081,6 +1241,7 @@ export class QueueEngine extends EventEmitter {
       o.status = 'queued';
       o.fulfilledAt = null;
       o.bumped = false; // return to its natural position, not the top
+      this._recordVaultOrder(o); // refresh ledger status (→ queued)
     }
     if (this.combineMode !== 'off') this.openBatch.set(buyerId, batchKey);
     this._markTopReached();
@@ -1157,6 +1318,7 @@ export class QueueEngine extends EventEmitter {
       pinnedAt: Date.now(),
     };
     this.orders.set(id, order);
+    this._recordVaultOrder(order); // durable vault audit ledger (observational)
     this._markTopReached();
     this._persist();
     const entry = this._entryFor(order.batchKey);
@@ -1555,6 +1717,9 @@ export class QueueEngine extends EventEmitter {
       })),
       variantLog: this.variantLog.slice(0, 50),
       vaultTallyLog: this.vaultTallyLog.slice(0, 50),
+      // Lean vault reconciliation summary (per-vault counted vs expected + miss
+      // count). Full per-order detail is served separately via /api/vault-ledger.
+      vaultAudit: this._vaultAuditSummary(),
       history: this.history.map((s) => ({
         id: s.id,
         label: s.label || null,
@@ -1601,7 +1766,7 @@ export class QueueEngine extends EventEmitter {
     if (!orders.length) return null;
     const buyerId = orders[0].buyerId;
     const now = Date.now();
-    for (const o of orders) { o.status = 'cancelled'; o.cancelledAt = now; o.bumped = false; }
+    for (const o of orders) { o.status = 'cancelled'; o.cancelledAt = now; o.bumped = false; this._recordVaultOrder(o); }
     if (this.openBatch.get(buyerId) === batchKey) this.openBatch.delete(buyerId);
     this.preppedBatches.delete(batchKey);
     this._markTopReached();
@@ -1640,6 +1805,7 @@ export class QueueEngine extends EventEmitter {
     o.status = 'cancelled';
     o.cancelledAt = Date.now();
     o.bumped = false;
+    this._recordVaultOrder(o); // refresh ledger status (→ cancelled)
     // If the buyer's open slot has no queued orders left, close it.
     const stillOpen = [...this.orders.values()].some(
       (x) => x.batchKey === o.batchKey && x.status === 'queued'
@@ -2275,6 +2441,49 @@ export class QueueEngine extends EventEmitter {
       }
     } catch (e) {
       console.warn('[queue] fulfilled-name backfill failed:', e.message);
+    }
+  }
+
+  /** Seed the vault ledger from orders currently in memory (on boot), so it's
+   *  populated immediately for a first deploy and after a restart — not only from
+   *  new orders going forward. Idempotent: existing entries are refreshed (status/
+   *  counted), new ones added with their real first-seen time. One persist at end. */
+  _backfillVaultLedger() {
+    try {
+      if (!this.trackedVariants.length) return;
+      const now = Date.now();
+      for (const o of this.orders.values()) {
+        const matches = this._vaultMatches(o);
+        if (!matches.length) continue;
+        const id = String(o.id);
+        const existing = this.vaultLedger[id];
+        if (existing) {
+          existing.status = o.status || existing.status;
+          if (o.vaultCounted && !existing.counted) existing.counted = true;
+          continue;
+        }
+        const byVault = {};
+        for (const m of matches) byVault[m.id] = (byVault[m.id] || 0) + m.amount;
+        this.vaultLedger[id] = {
+          orderId: id,
+          orderName: o.orderName || '',
+          buyer: o.buyer || '',
+          source: o.source || '',
+          items: (o.items || []).map((it) => ({ name: it.name || '', qty: it.qty || 1 })),
+          vaults: matches.map((m) => ({ id: m.id, label: m.label, amount: m.amount, item: m.item })),
+          expected: { total: matches.reduce((n, m) => n + m.amount, 0), byVault },
+          counted: !!o.vaultCounted, // pre-ledger counts: flagged counted, path unknown
+          countedAt: null,
+          path: null,
+          status: o.status || 'queued',
+          firstSeenAt: o.receivedAt || o.createdAt || now,
+          lastSeenAt: now,
+        };
+      }
+      this._pruneVaultLedger();
+      this._persistVaultLedger();
+    } catch (e) {
+      console.warn('[queue] vault ledger backfill failed:', e.message);
     }
   }
 
