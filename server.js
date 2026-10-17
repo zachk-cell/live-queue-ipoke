@@ -202,8 +202,8 @@ function overlayView() {
     // Per-overlay live display settings (scale / opacity / panel) for both the
     // queue and vault overlays.
     overlays: snap.overlays,
-    // Vault (tracked-variant) counts + labels, for the vault overlay.
-    variants: (snap.variants || []).map((v) => ({ id: v.id, label: v.label, count: v.count })),
+    // Vault (tracked-variant) counts + labels + chase card, for the vault overlay.
+    variants: (snap.variants || []).map((v) => ({ id: v.id, label: v.label, chase: v.chase || '', count: v.count })),
     tracker: snap.tracker,
     activeEventId: snap.activeEventId || null,
     event: active ? {
@@ -355,6 +355,11 @@ app.post('/api/manual-order/:key/priority', requireAuth, (req, res) => {
 // Set a manual slot's dollar total → { total }.
 app.post('/api/manual-order/:key/total', requireAuth, (req, res) => {
   res.json({ ok: queue.setManualQueueTotal(req.params.key, (req.body && req.body.total)) });
+});
+// Drag a selection of slots to a new position → { keys:[...], beforeKey }.
+app.post('/api/queue-reorder', requireAuth, (req, res) => {
+  const b = req.body || {};
+  res.json({ ok: queue.reorderQueueSelection(b.keys || [], b.beforeKey) });
 });
 // Put a slot on hold (off the main queue) / return it to the top of the queue.
 app.post('/api/hold/:key', requireAuth, (req, res) => res.json({ ok: !!queue.holdSlot(req.params.key) }));

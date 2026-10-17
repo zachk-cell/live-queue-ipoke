@@ -466,6 +466,9 @@ export class QueueEngine extends EventEmitter {
       label: String(d.label || d.id),
       product: String(d.product || ''),
       variant: String(d.variant || ''),
+      // The "chase card" that triggers this Vault — shown under the pack name on
+      // the Vault overlay. Free text, optional.
+      chase: String(d.chase || ''),
     }));
     this.trackedVariants = defs;
     const keep = {};
@@ -1391,6 +1394,55 @@ export class QueueEngine extends EventEmitter {
     return list.map((e, i) => ({ ...e, position: i + 1 }));
   }
 
+  /** Manually drag a selection of slots to a new position in the queue.
+   *  `keys` are the batchKeys being moved (kept in their current relative order);
+   *  `beforeKey` is the slot to drop them in front of ('__top__' = very top,
+   *  null/'' = bottom). The moved slots become PINNED to their new absolute
+   *  positions, so they hold their spot regardless of priority or incoming orders —
+   *  exactly like the manual-add pins — until another slot is dragged above them.
+   *  Every already-pinned slot is renumbered too, so a later drag can slot in above
+   *  earlier pins. */
+  reorderQueueSelection(keys, beforeKey) {
+    const sel = new Set((keys || []).map(String));
+    if (!sel.size) return false;
+    const current = this.activeQueue();               // full ordered list (all pages)
+    const moving = current.filter((e) => sel.has(String(e.key)));
+    if (!moving.length) return false;
+    const others = current.filter((e) => !sel.has(String(e.key)));
+    let idx;
+    if (beforeKey === '__top__') idx = 0;
+    else if (beforeKey == null || beforeKey === '' || beforeKey === '__bottom__') idx = others.length;
+    else {
+      idx = others.findIndex((e) => String(e.key) === String(beforeKey));
+      if (idx < 0) idx = others.length;               // target was itself moved / gone
+    }
+    const newOrder = [...others.slice(0, idx), ...moving, ...others.slice(idx)];
+    // Pinned set = everything already pinned (keep its spot) plus the moved slots.
+    const pinnedSet = new Set();
+    for (const e of newOrder) {
+      if (sel.has(String(e.key)) || e.pinnedPos != null) pinnedSet.add(String(e.key));
+    }
+    // Assign pinnedPos = 1-based index in the new arrangement. Non-pinned slots keep
+    // flowing (priority/time) into the gaps. Clear `bumped` on moved slots so the pin
+    // — not a stale bump — controls their placement.
+    const now = Date.now();
+    newOrder.forEach((e, i) => {
+      if (!pinnedSet.has(String(e.key))) return;
+      const orders = [...this.orders.values()].filter(
+        (o) => o.batchKey === String(e.key) && o.status === 'queued',
+      );
+      for (const o of orders) {
+        o.pinnedPos = i + 1;
+        o.pinnedAt = now;
+        if (sel.has(String(e.key))) o.bumped = false;
+      }
+    });
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'queue-reorder', count: moving.length });
+    return true;
+  }
+
   fulfilledSlots() {
     const byBatch = new Map();
     for (const o of this.orders.values()) {
@@ -1456,6 +1508,7 @@ export class QueueEngine extends EventEmitter {
       config: { priorityItems: this.priorityItems },
       variants: this.trackedVariants.map((v) => ({
         id: v.id, label: v.label, product: v.product, variant: v.variant,
+        chase: v.chase || '',
         count: this.variantCounts[v.id] || 0,
       })),
       variantLog: this.variantLog.slice(0, 50),
@@ -1744,7 +1797,10 @@ export class QueueEngine extends EventEmitter {
       buyer: o.buyer || 'Buyer',
       buyerHandle: o.buyerHandle || '',
       items: [item],
-      total: 0, // placement move only — the order's $ was already captured on the sealed order
+      // Carry the order's dollar value onto the ripped-live slot so it shows the
+      // right $ and keeps any value-based ($1000+) queue priority. The value is
+      // MOVED off the sealed order below (not copied), so revenue never double-counts.
+      total: Number(o.total) || 0,
       createdAt: Date.now(),
       receivedAt: Date.now(),
       status: 'queued',
@@ -1766,6 +1822,10 @@ export class QueueEngine extends EventEmitter {
       pinnedAt: Date.now(),
     };
     this.orders.set(liveId, order);
+    // The dollar value moved with the ripped item — zero it on the sealed side so the
+    // same money is never counted twice (on a partial move the remaining sealed items
+    // then show $0; on a whole-order move the sealed order drops off entirely below).
+    o.total = 0;
     // Remove the item from the sealed order; drop the sealed slot if nothing's left.
     items.splice(idx, 1);
     if (!items.length) { o.status = 'moved'; o.movedAt = Date.now(); }

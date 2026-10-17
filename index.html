@@ -43,6 +43,12 @@
   .secount{color:var(--muted);font-weight:700;letter-spacing:0}
   .slot{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:9px}
   .slotmain{display:flex;align-items:center;gap:12px;padding:12px 14px}
+  /* Batch select + drag-to-reorder controls at the left of each slot. */
+  .qdrag{cursor:grab;color:#5a6372;font-size:15px;flex:none;user-select:none;line-height:1}
+  .qdrag:active{cursor:grabbing}
+  .selchk{width:16px;height:16px;flex:none;accent-color:var(--pri);cursor:pointer;margin:0}
+  .slot.qdragging{opacity:.4}
+  .slot.qdrop-before{box-shadow:inset 0 3px 0 0 var(--accent)}
   .slot.new{animation:pop .18s ease}
   .slot.priority{border-color:var(--pri);background:linear-gradient(90deg,var(--pri-bg),var(--panel))}
   .slot.bumped{outline:2px solid var(--accent)}
@@ -216,6 +222,11 @@
   .vrow input{width:92px;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:6px 8px;border-radius:8px;font-size:14px;text-align:center;font-variant-numeric:tabular-nums}
   /* Give big counts (1000+) room and keep the Save/Reset buttons from squeezing it. */
   .vrow .vctl input{flex:1 1 auto;min-width:80px}
+  .vrow .vchaserow{display:flex;gap:6px;align-items:center;margin:4px 0 2px}
+  .vrow .vchasein{flex:1 1 auto;min-width:80px;width:auto;text-align:left;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:6px 8px;border-radius:8px;font-size:13px}
+  .vrow .vchasesave{flex:none;background:#2b6bff;border:none;color:#fff;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
+  .vrow .vchasesave.saved{background:#25c26e}
+  .vadd-chase{width:100%;box-sizing:border-box}
   .vrow .vctl .vsave,.vrow .vctl .vreset{flex:none}
   .vrow .vsave{background:#2b6bff;border:none;color:#fff;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
   .vrow .vsave.saved{background:#25c26e}
@@ -681,7 +692,7 @@
 
 <!-- iPoke: manual-combine selection bar -->
 <div class="combine-bar" id="combineBar">
-  <span><b id="cb-count">0</b> orders selected · matching names are highlighted</span>
+  <span><b id="cb-count">0</b> selected · drag any one to move them together, or Combine same-name orders</span>
   <button class="ghost" onclick="clearCombineSel()">Cancel</button>
   <button class="primary" onclick="doCombineSelected()">Combine</button>
 </div>
@@ -1039,6 +1050,55 @@
     postJSON('/api/events-reorder',{order:ids});
   }
 
+  // ── Rip-Live batch drag-reorder ───────────────────────────────────────────
+  // Tick one or more slot checkboxes, then drag any one of them to a new spot;
+  // the whole selection moves together and gets PINNED there (stays above
+  // priority/incoming orders until something is dragged above it). Dragging an
+  // UNticked row moves just that row.
+  let dragQueueKeys = null;
+  function qDragStart(ev, key){
+    const keys = selectedKeys.has(key) ? [...selectedKeys] : [key];
+    dragQueueKeys = keys;
+    try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain', key); }catch(e){}
+    const n0 = slotNodes.get(key);
+    if(n0){ try{ ev.dataTransfer.setDragImage(n0, 20, 14); }catch(e){} }
+    for(const k of keys){ const n = slotNodes.get(k); if(n) n.classList.add('qdragging'); }
+  }
+  function qDragOver(ev){
+    if(!dragQueueKeys) return;
+    ev.preventDefault();
+    try{ ev.dataTransfer.dropEffect='move'; }catch(e){}
+    clearQDropMarks();
+    ev.currentTarget.classList.add('qdrop-before');
+  }
+  function qDragLeave(ev){ ev.currentTarget.classList.remove('qdrop-before'); }
+  function qDropNode(ev){ qDrop(ev, (ev.currentTarget && ev.currentTarget.dataset) ? ev.currentTarget.dataset.key : null); }
+  function qDrop(ev, beforeKey){
+    ev.preventDefault(); ev.stopPropagation();
+    const keys = dragQueueKeys; dragQueueKeys = null;
+    clearQDropMarks();
+    document.querySelectorAll('.slot.qdragging').forEach(n=>n.classList.remove('qdragging'));
+    if(!keys || !keys.length) return;
+    if(beforeKey && keys.includes(beforeKey)) return; // dropped onto one of the moved rows
+    postJSON('/api/queue-reorder', { keys, beforeKey: beforeKey || null })
+      .then(()=>{ selectedKeys.clear(); updateCombineBar(); })
+      .catch(()=>alert("Couldn't move those — check your connection and try again."));
+  }
+  function qDragEnd(){
+    dragQueueKeys = null;
+    clearQDropMarks();
+    document.querySelectorAll('.slot.qdragging').forEach(n=>n.classList.remove('qdragging'));
+  }
+  function clearQDropMarks(){ document.querySelectorAll('.qdrop-before').forEach(n=>n.classList.remove('qdrop-before')); }
+  // Dropping onto empty space in the queue container (below the last row) sends the
+  // selection to the BOTTOM.
+  function qContainerInit(){
+    const qEl = document.getElementById('queue');
+    if(!qEl || qEl._qinit) return; qEl._qinit = true;
+    qEl.addEventListener('dragover', (ev)=>{ if(dragQueueKeys){ ev.preventDefault(); } });
+    qEl.addEventListener('drop', (ev)=>{ if(dragQueueKeys && ev.target === qEl){ qDrop(ev, null); } });
+  }
+
   async function toggleLive(){
     const live = (state.stats||{}).live;
     if(!live){
@@ -1207,6 +1267,8 @@
       + `<button class="mqbtn" title="Edit the items / note on this custom add" onclick="editManualItemsUI('${e.key}')">✎</button>`
     ) : '';
     return `<div class="slotmain">`
+      + `<span class="qdrag" draggable="true" title="Drag to move this order (or all selected orders) to a new spot in the queue" ondragstart="qDragStart(event,'${e.key}')" ondragend="qDragEnd(event)">⠿</span>`
+      + `<input type="checkbox" class="selchk" ${selectedKeys.has(e.key)?'checked':''} title="Select this order — tick several, then drag any one to move them together (or Combine same-name orders)" onclick="event.stopPropagation()" onchange="toggleSelect('${e.key}')">`
       + `<button class="removeb" title="Remove from queue (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`
       + `<div class="pos">${e.position}</div>`
       + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${manualBadge} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
@@ -1280,6 +1342,7 @@
       + `<button ${queuePage>=pages?'disabled':''} onclick="queueGoPage(${queuePage+1})">Next ›</button>`;
   }
   function renderQueue(){
+    qContainerInit();
     const filter = (document.getElementById('search').value||'').toLowerCase().trim();
     // For order-number search, compare on an alphanumeric-only form so a partial
     // like the last 6 digits matches regardless of a leading "#" or spaces.
@@ -1342,6 +1405,12 @@
         node.className = 'slot new'+(e.isPriority?' priority':'')+(e.bumped?' bumped':'')+((e.reorderedAtTop&&e.position===1)?' reorder':'')+(e.onHold?' onhold':'')+xtra;
         node.innerHTML = slotInner(e);
         node._sig = sig;
+        // Batch drag-reorder: each slot is a drop target (insert the dragged
+        // selection before it). dataset.key stays stable since nodes are keyed.
+        node.dataset.key = e.key;
+        node.addEventListener('dragover', qDragOver);
+        node.addEventListener('dragleave', qDragLeave);
+        node.addEventListener('drop', qDropNode);
         slotNodes.set(e.key, node);
         setTimeout(()=>node.classList.remove('new'), 260);
       } else if(node._sig !== sig){
@@ -1352,6 +1421,9 @@
       }
       // preserve the user's expand/collapse choice across live updates
       node.classList.toggle('expanded', expandedKeys.has(e.key));
+      // keep the selection highlight + checkbox in sync with selectedKeys every render
+      node.classList.toggle('selected', selectedKeys.has(e.key));
+      const _chk = node.querySelector('.selchk'); if(_chk) _chk.checked = selectedKeys.has(e.key);
       // highlight same-name slots while a combine selection is active
       node.classList.toggle('name-match', !selectedKeys.has(e.key) && matchNames.size>0 && matchNames.has(_cnorm(e.buyer)));
       // move into position ONLY if it's not already there (no needless re-attach)
@@ -1372,7 +1444,7 @@
     const title = (state.tracker && state.tracker.title) || 'Vault';
     // Rebuild only when the DEFINITIONS change (id / display name / keyword);
     // otherwise update counts in place so we never clobber a field being edited.
-    const sig = vs.map(v=>v.id+':'+v.label+':'+(v.variant||'')).join('|')+'~'+title;
+    const sig = vs.map(v=>v.id+':'+v.label+':'+(v.variant||'')+':'+(v.chase||'')).join('|')+'~'+title;
     if(box._sig !== sig){
       box._sig = sig;
       box.innerHTML = `<div class="vcard"><h3>${esc(title)} Counter</h3>
@@ -1380,6 +1452,10 @@
         <div class="vlist">${vs.length ? vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}" ondragover="vDragOver(event)" ondragleave="vDragLeave(event)" ondrop="vDrop(event,'${esc(v.id)}')">
           <div class="vlab"><span class="vdrag" draggable="true" title="Drag to reorder" ondragstart="vDragStart(event,'${esc(v.id)}')" ondragend="vDragEnd(event)">⠿</span>${esc(v.label)}<button class="vdel" title="Remove this ${esc(title)}" onclick="removeVault('${esc(v.id)}')">✕</button></div>
           ${v.variant?`<div class="vkw">matches items containing “${esc(v.variant)}”</div>`:''}
+          <div class="vchaserow">
+            <input class="vchasein" placeholder="Chase card (shown under the name on the overlay)" value="${esc(v.chase||'')}" />
+            <button class="vchasesave" onclick="saveVaultChase('${esc(v.id)}', this)">Save</button>
+          </div>
           <div class="vctl">
             <input type="number" min="0" class="vin" value="${Number(v.count)||0}" />
             <button class="vsave" onclick="saveVariant('${esc(v.id)}', this)">Save</button>
@@ -1390,6 +1466,7 @@
           <div class="vadd-h">+ Add a ${esc(title)}</div>
           <input class="vadd-nm" placeholder="Display name (e.g. Prismatic Evolutions)" />
           <input class="vadd-kw" placeholder="Item name / keyword (e.g. Prismatic Evolutions)" />
+          <input class="vadd-chase" placeholder="Chase card (optional — shown under the name)" />
           <button class="vadd-btn" onclick="addVault(this)">Add ${esc(title)}</button>
         </div>
         <details class="vlogwrap"><summary>▾ Reset / edit log</summary><div class="vlog" id="vlog-list"></div></details>
@@ -1437,7 +1514,7 @@
   // so add/remove can POST the whole set to /api/variants (which preserves the
   // live count of every id that survives).
   function currentVaultDefs(){
-    return (state.variants||[]).map(v=>({ id:v.id, label:v.label, product:v.product||'', variant:v.variant||'' }));
+    return (state.variants||[]).map(v=>({ id:v.id, label:v.label, product:v.product||'', variant:v.variant||'', chase:v.chase||'' }));
   }
   function vaultSlug(s){
     return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'vault';
@@ -1447,6 +1524,7 @@
     const wrap = btn.closest('.vadd');
     const kw = wrap.querySelector('.vadd-kw').value.trim();
     const nm = wrap.querySelector('.vadd-nm').value.trim();
+    const chase = (wrap.querySelector('.vadd-chase')||{}).value ? wrap.querySelector('.vadd-chase').value.trim() : '';
     if(!kw){ alert('Enter the item name or keyword that appears in the order (e.g. the set name).'); return; }
     const label = nm || kw;
     const defs = currentVaultDefs();
@@ -1454,13 +1532,26 @@
       alert('A Vault with that keyword already exists.'); return;
     }
     const id = vaultSlug(label)+'-'+Date.now().toString(36);
-    defs.push({ id, label, product:'', variant: kw });
+    defs.push({ id, label, product:'', variant: kw, chase });
     btn.disabled = true; const old = btn.textContent; btn.textContent = 'Adding…';
     try{
       await postJSON('/api/variants', { variants: defs });
       wrap.querySelector('.vadd-kw').value=''; wrap.querySelector('.vadd-nm').value='';
+      const ch = wrap.querySelector('.vadd-chase'); if(ch) ch.value='';
     }catch{ alert("Couldn't add that Vault — check your connection and try again."); }
     btn.disabled = false; btn.textContent = old;
+  }
+  // Save/edit a Vault's chase card (posts the full def set; counts are preserved).
+  async function saveVaultChase(id, btn){
+    const row = btn.closest('.vrow'); if(!row) return;
+    const val = (row.querySelector('.vchasein').value||'').trim();
+    const defs = currentVaultDefs().map(d=> d.id===id ? { ...d, chase: val } : d);
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Saving…';
+    try{
+      await postJSON('/api/variants', { variants: defs });
+      btn.textContent = 'Saved ✓'; btn.classList.add('saved');
+      setTimeout(()=>{ btn.textContent = old; btn.classList.remove('saved'); btn.disabled=false; }, 1200);
+    }catch{ alert("Couldn't save the chase card — check your connection and try again."); btn.textContent=old; btn.disabled=false; }
   }
   // Remove a Vault definition (its counter is discarded; confirm first).
   async function removeVault(id){

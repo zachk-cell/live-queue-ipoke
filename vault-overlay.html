@@ -46,7 +46,7 @@
   .head{padding:14px 18px 12px;display:flex;align-items:center;gap:10px;
     border-bottom:1px solid var(--line)}
   .vault-ico{font-size:18px;flex:none;filter:drop-shadow(0 2px 4px rgba(0,0,0,.7))}
-  .title{font-size:19px;font-weight:800;letter-spacing:.3px;color:var(--red);text-shadow:var(--txt-outline)}
+  .title{font-size:22px;font-weight:800;letter-spacing:.3px;color:var(--red);text-shadow:var(--txt-outline)}
   .count{margin-left:auto;font-size:14px;font-weight:800;color:var(--red-soft);text-shadow:var(--txt-outline)}
   .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
@@ -57,9 +57,13 @@
   /* Name takes the remaining space; the count stays right-aligned so every row's
      last digit lines up in a column. The gap is kept modest by capping the panel
      width (#wrap) rather than letting the name stretch across a wide panel. */
-  .nm{flex:1;min-width:0;font-weight:800;font-size:17px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+  /* Left column: pack name on top, the chase card in slightly smaller text under it. */
+  .nmwrap{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .nm{min-width:0;font-weight:800;font-size:21px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
     color:var(--red);text-shadow:var(--txt-outline)}
-  .num{font-variant-numeric:tabular-nums;font-weight:900;font-size:22px;min-width:40px;text-align:right;
+  .chase{min-width:0;font-weight:700;font-size:15px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+    color:var(--red-soft);text-shadow:var(--txt-outline)}
+  .num{font-variant-numeric:tabular-nums;font-weight:900;font-size:27px;min-width:46px;text-align:right;
     color:var(--red-deep);text-shadow:var(--txt-outline)}
   .empty{padding:26px 18px;text-align:center;color:var(--red-soft);font-size:15px;text-shadow:var(--txt-outline)}
   .more{padding:6px 12px 2px;font-size:13px;color:var(--red-soft);font-weight:700;text-shadow:var(--txt-outline)}
@@ -160,7 +164,10 @@
     const rows = variants.slice(0, ROWS);
     list.innerHTML = rows.length ? rows.map((v)=>`
       <div class="row">
-        <span class="nm">${esc(v.label)}</span>
+        <div class="nmwrap">
+          <span class="nm">${esc(v.label)}</span>
+          ${v.chase?`<span class="chase">${esc(v.chase)}</span>`:''}
+        </div>
         <span class="num">${Number(v.count)||0}</span>
       </div>`).join('') : '<div class="empty">No Vault sets tracked yet.</div>';
     moreEl.textContent = variants.length>rows.length ? `+${variants.length-rows.length} more` : '';
