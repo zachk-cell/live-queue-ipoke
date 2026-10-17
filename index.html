@@ -1097,7 +1097,9 @@
     const itemStr = e.items.map(i=>`${i.qty}× ${i.name}`).join(', ');
     const priBadge = e.isPriority?('<span class="badge pri">PRIORITY</span>'+(e.bigDollar?'<span class="badge bigd" title="Order total is $1,000+ — jumps the queue">💰 $1K+</span>':'')):'';
     const countBadge = `<span class="badge multi">${e.orderCount} order${e.orderCount===1?'':'s'}</span>`;
-    const manualBadge = e.manual ? `<span class="badge manualadd" title="Manually added to the queue by an admin${e.pinnedPos?(' · pinned to position '+e.pinnedPos):''}">✚ MANUAL</span>` : '';
+    const manualBadge = e.manual ? (e.movedFromSealed
+      ? `<span class="badge manualadd" title="Moved from the Ship-Sealed queue to be ripped live${e.pinnedPos?(' · pinned to position '+e.pinnedPos):''}">↑ FROM SEALED</span>`
+      : `<span class="badge manualadd" title="Manually added to the queue by an admin${e.pinnedPos?(' · pinned to position '+e.pinnedPos):''}">✚ MANUAL</span>`) : '';
     // Loud heads-up: this buyer ordered AGAIN while already at the top (bag likely
     // in progress). Only flash it while they're CURRENTLY #1 — the one being
     // packed right now; if a bump/priority pushes them down it stops flashing.
@@ -1159,7 +1161,7 @@
     ) : '';
     // Custom (manual) adds get position + items editors.
     const manualActions = e.manual ? (
-        `<button class="mqbtn" title="Change this custom add's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.pinnedPos||1})">⇅ Pos ${e.pinnedPos||1}</button>`
+        `<button class="mqbtn" title="Set this order's position in the queue (1 = top, above priority)" onclick="editManualPosUI('${e.key}',${e.pinnedPos||e.position||1})">⇅ Pos ${e.pinnedPos||e.position||1}</button>`
       + `<button class="mqbtn" title="Set/edit the order number for this custom add (blank by default)" onclick="editManualOrderNoUI('${e.key}')">＃ Order #</button>`
       + `<button class="mqbtn" title="Edit the items/note on this custom add" onclick="editManualItemsUI('${e.key}')">✎ Items</button>`
     ) : '';

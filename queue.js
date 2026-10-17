@@ -1003,6 +1003,7 @@ export class QueueEngine extends EventEmitter {
       pinnedPos: (first.pinnedPos != null ? first.pinnedPos : null),
       pinnedAt: first.pinnedAt || null,
       manual: !!first.manual,
+      movedFromSealed: !!first.movedFromSealed,
       priorFulfilled,
       // True when a new order merged into this slot while it was already #1 in
       // the queue — surfaced as a loud "ADDED MORE" badge in the panel. The
@@ -1538,6 +1539,10 @@ export class QueueEngine extends EventEmitter {
     let moved = 0, changed = 0;
     const queued = [...this.orders.values()].filter((o) => o.status === 'queued');
     for (const o of queued) {
+      // Never pull a Ship-Sealed item back out of an order that was DELIBERATELY
+      // moved into Rip-Live (buyer changed their mind and wants it ripped live) —
+      // otherwise this sweep would drag it straight back to the sealed queue.
+      if (o.movedFromSealed) continue;
       const items = o.items || [];
       const sealedItems = items.filter((it) => this._isSealedItem(it));
       const hasTip = items.some((it) => this._isTipItem(it));
@@ -1714,6 +1719,12 @@ export class QueueEngine extends EventEmitter {
       shipping: o.shipping || null,
       afterTopOf: null,
       movedFromSealed: true, // provenance flag (admin can see it came from Ship-Sealed)
+      // Treat it like a manual slot so its queue position is editable (and so the
+      // sealed-sweep leaves it alone). Not pinned by default — it enters at its
+      // natural spot and the admin can set a position with the ⇅ Pos control.
+      manual: true,
+      pinnedPos: null,
+      pinnedAt: Date.now(),
     };
     this.orders.set(liveId, order);
     // Remove the item from the sealed order; drop the sealed slot if nothing's left.
