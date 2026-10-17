@@ -889,9 +889,37 @@
   // Renders username + order number(s) into an off-screen iframe whose page size
   // is locked to the label, auto-shrinks the text to fit, and opens the print
   // dialog. Pick your thermal printer there (set it as default to make it 1 click).
-  function printLabel(key){
+  // ── International shipping detection (Shopify/SF orders only) ──────────────
+  // Country comes from the on-demand /api/order-shipping lookup; cached per order
+  // id for the session and fail-open (if it can't be determined, treated domestic).
+  const _intlCache = new Map();
+  function isIntlCountry(country){
+    const c = String(country||'').trim().toLowerCase().replace(/[.\s]/g,'');
+    if(!c) return false;
+    return !(c==='unitedstates'||c==='unitedstatesofamerica'||c==='usa'||c==='us'||c==='america');
+  }
+  async function orderIsInternational(sourceShort, orderId){
+    if(sourceShort!=='SF') return false;                 // only Shopify (web) orders
+    const oid = String(orderId||'').split('~')[0];        // strip the ~rip suffix on moved items
+    if(!oid || oid.startsWith('manual:')) return false;   // manual adds have no Shopify order
+    if(_intlCache.has(oid)) return _intlCache.get(oid);
+    try{
+      const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),3000);
+      const r=await fetch('/api/order-shipping/'+encodeURIComponent(oid),{signal:ctrl.signal});
+      clearTimeout(t);
+      const j=await r.json().catch(()=>({}));
+      const intl=isIntlCountry(j && j.shipping && j.shipping.country);
+      _intlCache.set(oid,intl);
+      return intl;
+    }catch(_){ return false; }
+  }
+
+  async function printLabel(key){
     const e = (state.queue||[]).find(x=>x.key===key);
     if(!e) return;
+    // International (Shopify, shipping outside the USA): add a Q:/V: customs note box
+    // at the bottom-left for the team to fill in by hand.
+    const intl = await orderIsInternational(e.sourceShort, (e.orderIds||[])[0]);
     const uname = e.buyer || 'Buyer';
     const ords = orderNoList(e);
     const ordLine = ords.join('   ');
@@ -925,6 +953,10 @@
          affects the auto-shrink height fit. */
       .srctag{position:absolute;right:0.055in;bottom:0.04in;font-size:9px;font-weight:800;
         letter-spacing:.5px;color:#000;border:1.25px solid #000;border-radius:3px;padding:0 3px;line-height:1.35}
+      /* International customs note (bottom-left): blank Q:/V: lines for the team to
+         write on. Extra vertical space between Q and V so there's room to handwrite. */
+      .customs{position:absolute;left:0.07in;bottom:0.05in;text-align:left;font-weight:800;font-size:10px;color:#000}
+      .customs .cl2{margin-top:0.16in}
     </style></head><body>
       ${flags.map(f=>`<div class="flag">${esc(f)}</div>`).join('')}
       <div class="uname" id="u">${esc(uname)}</div>
@@ -932,6 +964,7 @@
       ${countLine?`<div class="count">${esc(countLine)}</div>`:''}
       ${ordLine?`<div class="ord" id="o">${esc(ordLine)}</div>`:''}
       ${srcTag?`<div class="srctag">${esc(srcTag)}</div>`:''}
+      ${intl?`<div class="customs"><div class="cl">Q:</div><div class="cl cl2">V:</div></div>`:''}
       <script>(function(){
         function shrinkWidth(el,start,min){var s=start;el.style.fontSize=s+'px';
           while(s>min && el.scrollWidth>el.clientWidth){s--;el.style.fontSize=s+'px';}return s;}
@@ -1695,21 +1728,23 @@
   // Masked name (first + 2 of last) + order contents, for pulling & packing.
   // No customer address or phone. Works from a Rip-Live slot (scope 'queue') or a
   // Ship-Sealed order (scope 'sealed').
-  function printPacking(scope, key){
-    // Packing slip no longer prints the customer's shipping address or phone, and
-    // the name is shown masked (first name + first 2 letters of last name) — the
-    // same label used in the queue. Everything comes from the slot entry, so this
-    // no longer needs the on-demand shipping lookup at all.
-    let name='', orderNo='', items=[];
+  async function printPacking(scope, key){
+    // Packing slip shows the masked name + contents from the slot entry. For an
+    // international (Shopify, out-of-USA) order it also prints the word INTERNATIONAL
+    // so the packer knows customs paperwork applies.
+    let name='', orderNo='', items=[], srcShortCode='', oid='';
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
       name=s.buyer||''; orderNo=s.orderName||('#'+shortId(s.id)); items=s.items||[];
+      srcShortCode=srcShort(s.source); oid=String(s.id||'');
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
       name=e.buyer||'';
       orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
       items=e.items||[];
+      srcShortCode=e.sourceShort||''; oid=String((e.orderIds||[])[0]||'');
     }
+    const intl = await orderIsInternational(srcShortCode, oid);
     const totalQty=(items||[]).reduce((n,i)=>n+(Number(i.qty)||1),0);
     const itemRows=(items&&items.length)
       ? items.map(i=>`<div class="pk-item"><span class="pk-q">${Number(i.qty)||1}</span><span class="pk-n">${esc(i.name)}</span></div>`).join('')
@@ -1738,9 +1773,12 @@
       .pk-empty{font-style:italic}
       .pk-thanks{border-top:1px solid #000;margin-top:6px;padding-top:7px;text-align:center;font-size:11pt;font-weight:700}
       .pk-foot{margin-top:5px;font-size:8pt;display:flex;justify-content:space-between}
+      .pk-intl{border:2.5px solid #000;border-radius:5px;text-align:center;font-weight:800;font-size:14pt;
+        letter-spacing:2px;padding:4px 0;margin:6px 0 2px}
     </style></head><body>
       <div class="pk-brand">iPokeTCG</div>
       <div class="pk-hdr"><span class="t">PACKING SLIP</span><span class="o">${esc(orderNo)}</span></div>
+      ${intl?`<div class="pk-intl">INTERNATIONAL</div>`:''}
       <div class="pk-lbl"><span>Order for</span></div>
       <div class="pk-name">${esc(name)||'—'}</div>
       <div class="pk-lbl"><span>Order contents</span><span class="pk-count">${totalQty} item${totalQty===1?'':'s'}</span></div>
