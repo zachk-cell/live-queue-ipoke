@@ -1969,15 +1969,57 @@ export class QueueEngine extends EventEmitter {
     if (isNaN(d.getTime())) return String(mdY);
     return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   }
-  /** Called on boot and every minute. When the Pacific calendar day changes,
-   *  archive the finished day's fulfilled + cancelled orders into Past Days and
-   *  clear them, LEAVING any still-queued (unfulfilled) orders on the board. */
+  // Pacific calendar parts (year/month/day, weekday 0=Sun..6=Sat, hour 0-23).
+  _laParts(ts) {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        weekday: 'short', hour: 'numeric', hour12: false,
+      }).formatToParts(new Date(ts || Date.now())).map((p) => [p.type, p.value])
+    );
+    const wd = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[parts.weekday];
+    return { y: +parts.year, m: +parts.month, d: +parts.day, weekday: wd, hour: (+parts.hour) % 24 };
+  }
+  /** The auto-archive runs on a stream-day cycle, NOT at plain midnight:
+   *    • Mon/Tue/Wed/Thu streams archive at 3:00 AM Pacific the NEXT morning
+   *      (so late-night fulfillment after midnight still lands in that day).
+   *    • The Friday stream waits and archives at 12:00 AM Pacific Sunday
+   *      (Fri + Sat are held together through the weekend).
+   *  This returns a stable date label for the stream day the given moment belongs
+   *  to; it only changes when a cycle boundary (a trigger) is crossed. Days with
+   *  no stream (Sun before Mon's cycle, Sat inside Fri's cycle) fold into the
+   *  neighbouring stream day's bucket. */
+  _currentStreamDay(ts) {
+    const p = this._laParts(ts);
+    // Offset (in days) from today's Pacific date to the cycle's stream day.
+    let off;
+    switch (p.weekday) {
+      case 0: off = 1; break;                 // Sun  → folds into Mon's cycle (ends Tue 3am)
+      case 1: off = 0; break;                 // Mon
+      case 2: off = p.hour < 3 ? -1 : 0; break; // Tue (before 3am still Mon's cycle)
+      case 3: off = p.hour < 3 ? -1 : 0; break; // Wed (before 3am still Tue's)
+      case 4: off = p.hour < 3 ? -1 : 0; break; // Thu (before 3am still Wed's)
+      case 5: off = p.hour < 3 ? -1 : 0; break; // Fri (before 3am still Thu's)
+      case 6: off = -1; break;                // Sat  → folds into Fri's cycle (ends Sun 12am)
+      default: off = 0;
+    }
+    // Build the stream-day label (M/D/YYYY, matching _laDateString) via UTC noon so
+    // the ±day shift is DST-safe.
+    const base = new Date(Date.UTC(p.y, p.m - 1, p.d, 12));
+    base.setUTCDate(base.getUTCDate() + off);
+    return `${base.getUTCMonth() + 1}/${base.getUTCDate()}/${base.getUTCFullYear()}`;
+  }
+  /** Called on boot and every minute. When the stream-day cycle rolls over (see
+   *  _currentStreamDay for the Mon–Thu 3am / Fri→Sun-midnight schedule), archive
+   *  the finished cycle's fulfilled + cancelled orders into Past Days and clear
+   *  them, LEAVING any still-queued (unfulfilled) orders on the board. */
   maybeDailyRollover() {
-    const today = this._laDateString();
-    if (!this.lastRolloverDay) { this.lastRolloverDay = today; this._persist(); return false; }
-    if (today === this.lastRolloverDay) return false;
+    const cur = this._currentStreamDay();
+    if (!this.lastRolloverDay) { this.lastRolloverDay = cur; this._persist(); return false; }
+    if (cur === this.lastRolloverDay) return false;
     this._rolloverDay(this._prettyDay(this.lastRolloverDay));
-    this.lastRolloverDay = today;
+    this.lastRolloverDay = cur;
     this._persist();
     return true;
   }
@@ -2658,14 +2700,24 @@ export class QueueEngine extends EventEmitter {
     };
   }
 
-  /** Compact summary of every event (for the admin list + overlay/Discord). */
+  /** Compact summary of every event (for the admin list + overlay/Discord).
+   *  Sold-out events bubble to the TOP of the list, in the order they sold out
+   *  (earliest first), and carry a soldOutAt stamp the UI uses to highlight them. */
   eventsSummary() {
-    return this.events.map((ev) => {
+    const now = Date.now();
+    let changed = false;
+    const out = this.events.map((ev) => {
       const q = this.eventQueue(ev.id);
+      // Stamp the moment an event first sells out; clear it if it later drops back
+      // below capacity (spots added, or a seat cancelled). This drives both the
+      // sold-out-first ordering and the green highlight.
+      if (q.soldOut && !ev.soldOutAt) { ev.soldOutAt = now; changed = true; }
+      else if (!q.soldOut && ev.soldOutAt) { ev.soldOutAt = null; changed = true; }
       return {
         id: ev.id, type: ev.type, title: ev.title, description: ev.description,
         totalSpots: ev.totalSpots, spotsOrdered: q.spotsOrdered, spotsRemaining: q.spotsRemaining,
-        soldOut: q.soldOut, oversold: q.oversold, oversoldSpots: q.oversoldSpots,
+        soldOut: q.soldOut, soldOutAt: ev.soldOutAt || null,
+        oversold: q.oversold, oversoldSpots: q.oversoldSpots,
         entryCount: q.entryCount,
         unfulfilledCount: q.unfulfilledCount, spotsUnfulfilled: q.spotsUnfulfilled,
         status: ev.status, rippedAt: ev.rippedAt || null,
@@ -2677,6 +2729,17 @@ export class QueueEngine extends EventEmitter {
         entries: q.entries,
       };
     });
+    // Sold-out events first, in the order they sold out (earliest soldOutAt first).
+    // Everything else keeps its normal (manual-drag / creation) order — a stable
+    // sort leaves non-sold-out events exactly where they were.
+    out.sort((a, b) => {
+      const aa = a.soldOutAt || 0, bb = b.soldOutAt || 0;
+      if (!aa !== !bb) return aa ? -1 : 1;  // sold-out before not-sold-out
+      if (aa && bb) return aa - bb;          // earlier sell-out sits higher
+      return 0;
+    });
+    if (changed) this._persist();
+    return out;
   }
 
   /** Inject a synthetic order for testing (e.g. label printing) regardless of

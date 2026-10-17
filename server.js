@@ -748,9 +748,10 @@ if (tiktokEnabled()) {
 if (shopifyEnabled()) {
   startShopifyPolling(queue);
 }
-// iPoke perpetual: roll fulfilled orders into "Past Days" at Pacific midnight.
-// Runs a catch-up check on boot (covers a redeploy across midnight), then every
-// minute. Unfulfilled orders stay on the board.
+// iPoke perpetual: roll fulfilled orders into "Past Days" on a stream-day cycle
+// (Mon–Thu archive 3 AM Pacific the next morning; Friday waits until 12 AM Pacific
+// Sunday). Runs a catch-up check on boot (covers a redeploy across a trigger),
+// then every minute. Unfulfilled orders stay on the board.
 if (queue.perpetual) {
   queue.maybeDailyRollover();
   // Also count any off-top vault orders that have stayed fulfilled past the grace

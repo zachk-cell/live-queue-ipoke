@@ -354,6 +354,13 @@
   .erow:first-of-type{border-top:none}
   .erow.dragging{opacity:.45}
   .erow.drag-over{box-shadow:inset 0 2px 0 #4a92ff;background:#0f1622}
+  /* Sold-out events are highlighted green (analogous to the gold priority slots)
+     and float to the top of the list (ordering handled server-side). */
+  .erow.soldout{background:linear-gradient(90deg, rgba(37,194,110,.16), rgba(37,194,110,0) 72%);
+    box-shadow:inset 3px 0 0 0 var(--done);border-radius:8px;padding-left:9px}
+  .erow.soldout.drag-over{box-shadow:inset 0 2px 0 #4a92ff, inset 3px 0 0 0 var(--done)}
+  .emini.soldout{background:linear-gradient(90deg, rgba(37,194,110,.16), rgba(37,194,110,0) 80%);
+    box-shadow:inset 3px 0 0 0 var(--done);border-radius:6px;padding:2px 6px}
   .edrag{cursor:grab;color:#5a627a;font-size:14px;line-height:1;padding:0 2px;flex:none;user-select:none}
   .edrag:active{cursor:grabbing}
   .edrag:hover{color:#9aa3b5}
@@ -2150,7 +2157,8 @@
           <button class="eqedit" title="Rename this seat" onclick="openRenameSeat('${en.id}')">✎</button>
           <button class="eqx" title="Remove this spot" onclick="removeEventEntryUI('${en.id}')">✕</button>
         </div>`).join('') : '<div class="eqrow" style="color:#748099">No spots yet.</div>';
-      return `<div class="erow ${expandedEvents.has(e.id)?'open':''}" data-eid="${e.id}" ondragover="evDragOver(event)" ondragleave="evDragLeave(event)" ondrop="evDrop(event,'${e.id}')">
+      const soldOutHi = (e.soldOut && !e.oversold) ? ' soldout' : '';
+      return `<div class="erow${soldOutHi} ${expandedEvents.has(e.id)?'open':''}" data-eid="${e.id}" ondragover="evDragOver(event)" ondragleave="evDragLeave(event)" ondrop="evDrop(event,'${e.id}')">
         <div class="etop">
           <span class="edrag" draggable="true" title="Drag to reorder this event" ondragstart="evDragStart(event,'${e.id}')" ondragend="evDragEnd(event)">⠿</span>
           <span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>
@@ -2189,7 +2197,8 @@
           : e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
                      : `<span class="rem">${e.spotsRemaining} left</span> / ${e.totalSpots}`)
         : `${e.spotsOrdered} ordered`;
-      return `<div class="emini"><span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>`
+      const miniSoldOut = (e.soldOut && !e.oversold) ? ' soldout' : '';
+      return `<div class="emini${miniSoldOut}"><span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>`
         + `<span class="emininm">${esc(e.title)}</span>`
         + `${e.active?'<span class="eactive">● ON</span>':''}`
         + `<span class="eminisp">${spots}</span></div>`;
