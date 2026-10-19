@@ -1034,12 +1034,18 @@
   // One thermal label (2.25"x1.25") per person in an event's side-queue, all sent
   // to the print dialog at once. Each label: event title, buyer (first + 2 of last),
   // their order #, and their spot count.
-  function printEventLabels(eventId){
+  async function printEventLabels(eventId){
     const ev=(state.events||[]).find(e=>e.id===eventId);
     if(!ev) return;
     const entries=(ev.entries||[]);
     if(!entries.length){ alert('No seats in this event yet.'); return; }
-    const labels=entries.map(en=>{
+    // International (Shopify order shipping outside the USA) applies to event seats
+    // exactly like the Rip-Live labels — resolve each seat's country up front (in
+    // parallel, cached + fail-open) so we can stamp the Q:/V: customs box on it.
+    const intlFlags = await Promise.all(
+      entries.map(en => orderIsInternational(srcShort(en.source), en.orderId))
+    );
+    const labels=entries.map((en,i)=>{
       const nm=esc(en.buyer||'');
       const ord=esc(en.orderName||(en.orderId?('#'+shortId(en.orderId)):''));
       const sp=Number(en.spots)||1;
@@ -1047,7 +1053,8 @@
       const meta=[ord, `×${sp}`].filter(Boolean).join(' · ');
       const posTxt=(pos!==''?('Pos '+pos):'');
       const src=srcShort(en.source);
-      return `<div class="lbl"><div class="pos">${posTxt}</div><div class="body"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${meta}</div></div>${src?`<div class="src">${esc(src)}</div>`:''}</div>`;
+      const intl=intlFlags[i];
+      return `<div class="lbl"><div class="pos">${posTxt}</div><div class="body"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${meta}</div></div>${src?`<div class="src">${esc(src)}</div>`:''}${intl?`<div class="customs"><div class="cl">Q:</div><div class="cl cl2">V:</div></div>`:''}</div>`;
     }).join('');
     const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page{size:2.25in 1.25in;margin:0}
@@ -1071,6 +1078,10 @@
         width:100%;line-height:1.05;margin-bottom:2px}
       .lbl .nm{font-size:20px;font-weight:800;line-height:1.05;width:100%;word-break:break-word}
       .lbl .meta{font-size:9.5pt;font-weight:700;margin-top:3px;font-family:'Courier New',monospace}
+      /* International customs note (bottom-left): blank Q:/V: lines for the team to
+         handwrite — matches the Rip-Live label. Extra gap between Q and V for room. */
+      .lbl .customs{position:absolute;left:0.07in;bottom:0.05in;text-align:left;font-weight:800;font-size:10px;color:#000}
+      .lbl .customs .cl2{margin-top:0.16in}
     </style></head><body>${labels}
       <script>(function(){
         function fit(el,start,floor){
