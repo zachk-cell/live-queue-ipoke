@@ -1190,6 +1190,11 @@ export class QueueEngine extends EventEmitter {
       // above priority). pinnedAt breaks ties between two pins at the same position.
       pinnedPos: (first.pinnedPos != null ? first.pinnedPos : null),
       pinnedAt: first.pinnedAt || null,
+      // Overall-position manual placement (new model): a forced spot the slot is
+      // spliced into in activeQueue. insertPos = number (1 = top) or null;
+      // insertBottom = always-last. Both empty → flows as a regular order.
+      insertPos: (first.insertPos != null ? first.insertPos : null),
+      insertBottom: !!first.insertBottom,
       manual: !!first.manual,
       manualPriority: !!first.manualPriority,
       movedFromSealed: !!first.movedFromSealed,
@@ -1289,23 +1294,52 @@ export class QueueEngine extends EventEmitter {
     });
   }
 
-  addManualQueueOrder({ buyer, orderName, position, items } = {}) {
+  /** Parse the flexible `position` value a manual add / re-position can carry:
+   *    - blank / null / unrecognized → regular order (flows by time + auto priority)
+   *    - "top" or 1                  → forced to the very top (overall position 1)
+   *    - "bottom" / "end"            → forced to the very bottom
+   *    - a number N                  → forced to overall position N
+   *  Returns { insertPos, insertBottom }. insertPos is a number (1 = top) or null;
+   *  insertBottom is a boolean. Both null/false means "regular, no forced spot". */
+  _parseManualPlacement(position) {
+    if (position == null) return { insertPos: null, insertBottom: false };
+    const s = String(position).trim().toLowerCase();
+    if (s === '') return { insertPos: null, insertBottom: false };
+    if (s === 'top') return { insertPos: 1, insertBottom: false };
+    if (s === 'bottom' || s === 'bot' || s === 'end' || s === 'last') {
+      return { insertPos: null, insertBottom: true };
+    }
+    const n = Math.floor(Number(s));
+    if (Number.isFinite(n) && n >= 1) return { insertPos: n, insertBottom: false };
+    return { insertPos: null, insertBottom: false };
+  }
+
+  addManualQueueOrder({ buyer, orderName, position, total, items } = {}) {
     const nm = String(buyer == null ? '' : buyer).trim() || 'Manual add';
-    const pos = Math.max(1, Math.floor(Number(position) || 1));
+    const place = this._parseManualPlacement(position);
+    // Optional dollar total → shows in the money column and auto-flags the $1000
+    // priority jump (used when the slot flows as a regular/time-based order).
+    let amt = Number(total);
+    if (!isFinite(amt) || amt < 0) amt = 0;
+    amt = Math.round(amt * 100) / 100;
     const id = `manual:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     const buyerId = id;
+    const parsedItems = this._parseItemsText(items);
     const order = {
       id,
       buyerId,
       buyer: nm,
       buyerHandle: '',
-      items: this._parseItemsText(items),
-      total: 0,
+      items: parsedItems,
+      total: amt,
       createdAt: Date.now(),
       receivedAt: Date.now(),
       status: 'queued',
       batchKey: `${buyerId}#${++this.batchCounter}`,
-      hasPriority: false,
+      // Keyword priority auto-detected from the items/note; the $1000 jump is
+      // derived from `total` in _entryFor (bigDollar). Both only affect the sort
+      // when this slot flows as a regular order (no forced top/bottom/N spot).
+      hasPriority: this._isPriorityOrder(parsedItems),
       mergedWhileTop: false,
       onHold: false,
       source: '',
@@ -1314,8 +1348,13 @@ export class QueueEngine extends EventEmitter {
       shipping: null,
       afterTopOf: null,
       manual: true,
-      pinnedPos: pos,
+      // New overall-position model: insertPos/insertBottom force a true overall
+      // spot (spliced in activeQueue). pinnedPos (the old top-block) is left null
+      // for new manual adds so "position 5" actually lands at 5, not position 1.
+      pinnedPos: null,
       pinnedAt: Date.now(),
+      insertPos: place.insertPos,
+      insertBottom: place.insertBottom,
     };
     this.orders.set(id, order);
     this._recordVaultOrder(order); // durable vault audit ledger (observational)
@@ -1334,11 +1373,17 @@ export class QueueEngine extends EventEmitter {
       (o) => o.batchKey === String(batchKey) && o.status === 'queued' && o.manual,
     );
     if (!orders.length) return false;
-    const pos = Math.max(1, Math.floor(Number(position) || 1));
-    for (const o of orders) { o.pinnedPos = pos; o.pinnedAt = Date.now(); }
+    const place = this._parseManualPlacement(position);
+    for (const o of orders) {
+      o.insertPos = place.insertPos;
+      o.insertBottom = place.insertBottom;
+      o.pinnedPos = null;      // use the overall-position model, not the old top-block
+      o.pinnedAt = Date.now();
+      o.bumped = false;
+    }
     this._markTopReached();
     this._persist();
-    this.emit('change', { reason: 'manual-queue-position', batchKey: String(batchKey), position: pos });
+    this.emit('change', { reason: 'manual-queue-position', batchKey: String(batchKey) });
     return true;
   }
 
@@ -1558,8 +1603,13 @@ export class QueueEngine extends EventEmitter {
       [...this.orders.values()].filter((o) => o.status === 'queued').map((o) => o.batchKey)
     );
     const entries = [...keys].map((k) => this._entryFor(k)).filter(Boolean);
-    const pinned = entries.filter((e) => e.pinnedPos != null && !e.bumped);
-    const rest = entries.filter((e) => e.pinnedPos == null || e.bumped);
+    // Manual adds placed at an explicit OVERALL spot (top / bottom / position N)
+    // are set aside here and spliced into the final list below — so a lone manual
+    // add at "position 5" actually lands at 5, instead of being forced to the top.
+    const inserts = entries.filter((e) => e.insertPos != null || e.insertBottom);
+    const normal = entries.filter((e) => !(e.insertPos != null || e.insertBottom));
+    const pinned = normal.filter((e) => e.pinnedPos != null && !e.bumped);
+    const rest = normal.filter((e) => e.pinnedPos == null || e.bumped);
     // A slot that's been waiting more than 14h ranks ABOVE incoming priority — so a
     // fresh priority order can't keep burying someone who's already waited that long.
     const now = Date.now();
@@ -1581,6 +1631,24 @@ export class QueueEngine extends EventEmitter {
     // still works.
     pinned.sort((a, b) => ((a.pinnedPos || 1) - (b.pinnedPos || 1)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
     const list = [...pinned, ...rest];
+    // Splice the forced-spot manual adds into the natural list. Position-N (and
+    // "top" = 1) inserts go in first, in ascending target order so earlier targets
+    // aren't shifted by later ones; ties break by pin time. "Bottom" inserts are
+    // appended last so they always sit at the very end. Each render re-splices at
+    // the same target index, so a forced slot holds its spot as the queue churns.
+    const positioned = inserts
+      .filter((e) => !e.insertBottom)
+      .sort((a, b) => ((a.insertPos || 1) - (b.insertPos || 1)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
+    const bottoms = inserts
+      .filter((e) => e.insertBottom)
+      .sort((a, b) => (a.pinnedAt || 0) - (b.pinnedAt || 0));
+    for (const e of positioned) {
+      let idx = Math.floor(Number(e.insertPos) || 1) - 1;
+      if (idx < 0) idx = 0;
+      if (idx > list.length) idx = list.length;
+      list.splice(idx, 0, e);
+    }
+    for (const e of bottoms) list.push(e);
     return list.map((e, i) => ({ ...e, position: i + 1 }));
   }
 
@@ -1637,10 +1705,14 @@ export class QueueEngine extends EventEmitter {
    *  bump) so it flows back in by priority/time like a normal order. */
   unpinQueueSlot(batchKey) {
     const orders = [...this.orders.values()].filter(
-      (o) => o.batchKey === String(batchKey) && o.status === 'queued' && (o.pinnedPos != null || o.bumped),
+      (o) => o.batchKey === String(batchKey) && o.status === 'queued' &&
+        (o.pinnedPos != null || o.bumped || o.insertPos != null || o.insertBottom),
     );
     if (!orders.length) return false;
-    for (const o of orders) { o.pinnedPos = null; o.pinnedAt = null; o.bumped = false; }
+    for (const o of orders) {
+      o.pinnedPos = null; o.pinnedAt = null; o.bumped = false;
+      o.insertPos = null; o.insertBottom = false;
+    }
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'queue-unpin', batchKey: String(batchKey) });

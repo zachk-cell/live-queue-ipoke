@@ -333,7 +333,7 @@ app.post('/api/bump/:key', requireAuth, (req, res) => res.json({ ok: !!queue.bum
 // Manually add a buyer to the Rip-Live queue at a chosen position → { buyer, orderName, position, items }.
 app.post('/api/manual-order', requireAuth, (req, res) => {
   const b = req.body || {};
-  const entry = queue.addManualQueueOrder({ buyer: b.buyer, orderName: b.orderName, position: b.position, items: b.items });
+  const entry = queue.addManualQueueOrder({ buyer: b.buyer, orderName: b.orderName, position: b.position, total: b.total, items: b.items });
   res.json({ ok: !!entry, entry: entry || null });
 });
 // Change a manual slot's position in the queue → { position }.
