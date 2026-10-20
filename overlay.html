@@ -126,6 +126,11 @@
 <script>
   const params = new URLSearchParams(location.search);
   const ROWS = Math.max(1, Math.min(Number(params.get('rows')) || 12, 40));
+  // Auto-reel once the list is longer than this many (queue OR event roster). The
+  // reel window is also capped to this many rows so anything above it always
+  // overflows and actually scrolls (if every row fits, the engine sits still by
+  // design). Default 8; override with ?reelmin=N (never more than ROWS).
+  const REEL_AT = Math.max(1, Math.min(Number(params.get('reelmin')) || 8, ROWS));
   const SIDE = params.get('side') === 'right' ? 'right' : 'left';
   const TITLE = params.get('title');
   // Reel mode: slowly auto-scroll through the WHOLE queue, looping. Enable with
@@ -227,7 +232,7 @@
       // Event view reels through the whole roster when reel mode is on OR whenever
       // the roster is longer than what fits on screen (ROWS) — so a long event
       // side-queue auto-scrolls instead of truncating to a static "+N more".
-      if(REEL || ev.entries.length > ROWS){
+      if(REEL || ev.entries.length > REEL_AT){
         moreEl.textContent = '';
         if(!ev.entries.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">No spots yet.</div>'; return; }
         renderReel(ev.entries, evtRowHtml, evtSig);
@@ -247,9 +252,9 @@
     countEl.textContent = q.length + (q.length===1?' in line':' in line');
     meta.innerHTML = '';
 
-    if(REEL || q.length > ROWS){
+    if(REEL || q.length > REEL_AT){
       // Reel mode: render EVERYONE and let the track auto-scroll. Triggers on the
-      // ?reel=1 URL or automatically once the queue is longer than fits (ROWS).
+      // ?reel=1 URL or automatically once the queue is longer than REEL_AT.
       moreEl.textContent = '';
       if(!q.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">Queue is empty — waiting on orders.</div>'; return; }
       renderReel(q);
@@ -333,7 +338,7 @@
     const rowH = firstRow ? firstRow.getBoundingClientRect().height : 44;
     const gap = 6;               // matches .reel-track gap
     const padY = 8 + 12;         // .list top + bottom padding
-    const visible = Math.max(1, Math.min(ROWS, qLen));
+    const visible = Math.max(1, Math.min(REEL_AT, qLen));
     list.style.height = Math.round(visible*rowH + (visible-1)*gap + padY) + 'px';
   }
 
