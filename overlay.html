@@ -58,6 +58,12 @@
   .evt-meter > i{display:block;height:100%;background:linear-gradient(90deg,var(--pri),#ffd27a)}
   .evt-spots{padding:6px 18px 2px;font-size:13px;font-weight:800;color:#fff;text-shadow:var(--txt-outline)}
   .evt-spots .rem{color:var(--pri)} .evt-spots .full{color:var(--done)}
+  /* 🏆 Winner banner (event mode) — gold, prominent, sits above the roster. */
+  .evt-winner{margin:8px 18px 4px;padding:7px 12px;border-radius:9px;text-align:center;
+    font-size:16px;font-weight:900;letter-spacing:.4px;color:#2a1e00;
+    background:linear-gradient(90deg,var(--pri),#ffd27a);box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+  .row.winner{background:linear-gradient(90deg,rgba(255,176,32, calc(0.22 + var(--bg-alpha) * 0.24)),rgba(255,255,255, calc(var(--bg-alpha) * 0.03)))}
+  .row.winner .nm{color:var(--pri);font-weight:800}
   .list{padding:8px 10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
   .row{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:11px;
     background:rgba(255,255,255, calc(0.03 + var(--bg-alpha) * 0.04))}
@@ -219,8 +225,12 @@
       titleEl.textContent = TITLE || ev.title || (ev.type==='wta'?'WTA Event':'Quack Pack');
       countEl.textContent = ev.entries.length + (ev.entries.length===1?' spot':' spots');
       const pct = ev.totalSpots>0 ? Math.min(100, Math.round(ev.spotsOrdered/ev.totalSpots*100)) : 0;
+      // 🏆 Winner banner — shows as soon as the admin picks a winner (even once all
+      // spots are fulfilled and the roster below is empty).
+      const winnerHtml = ev.winner ? `<div class="evt-winner">🏆 WINNER: ${esc(ev.winner)}</div>` : '';
       meta.innerHTML =
-        (ev.description?`<div class="evt-sub">${esc(ev.description)}</div>`:'')
+        winnerHtml
+        + (ev.description?`<div class="evt-sub">${esc(ev.description)}</div>`:'')
         + (ev.totalSpots>0?`<div class="evt-meter"><i style="width:${pct}%"></i></div>`:'')
         + `<div class="evt-spots">`
           + (ev.totalSpots>0
@@ -234,13 +244,13 @@
       // side-queue auto-scrolls instead of truncating to a static "+N more".
       if(REEL || ev.entries.length > REEL_AT){
         moreEl.textContent = '';
-        if(!ev.entries.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = '<div class="empty">No spots yet.</div>'; return; }
+        if(!ev.entries.length){ stopReel(); list.classList.remove('reeling'); list.style.height=''; list.innerHTML = ev.winner ? '' : '<div class="empty">No spots yet.</div>'; return; }
         renderReel(ev.entries, evtRowHtml, evtSig);
         return;
       }
       list.classList.remove('reeling'); reelSig=''; list.style.height=''; // static (non-reel) fallback
       const rows = ev.entries.slice(0, ROWS);
-      list.innerHTML = rows.length ? rows.map((e,i)=>evtRowHtml(e, i===0)).join('') : '<div class="empty">No spots yet.</div>';
+      list.innerHTML = rows.length ? rows.map((e,i)=>evtRowHtml(e, i===0)).join('') : (ev.winner ? '' : '<div class="empty">No spots yet.</div>');
       moreEl.textContent = ev.entries.length>rows.length ? `+${ev.entries.length-rows.length} more` : '';
       return;
     }
@@ -286,8 +296,8 @@
   function evtRowHtml(e, top){
     const alt = (Number(e.position) % 2 === 0) ? ' alt' : '';
     return `
-      <div class="row${top?' top':''}${alt}">
-        <span class="pos">${e.position}</span>
+      <div class="row${top?' top':''}${e.winner?' winner':''}${alt}">
+        <span class="pos">${e.winner?'🏆':e.position}</span>
         <span class="nm">${esc(e.buyer)}</span>
         ${e.spots>1?`<span class="spots">×${e.spots}</span>`:''}
         ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}

@@ -215,10 +215,14 @@ function overlayView() {
       spotsOrdered: active.spotsOrdered,
       spotsRemaining: active.spotsRemaining,
       soldOut: active.soldOut,
+      // Winner (if the admin has picked one) — surfaced across ALL entries, not just
+      // the unfulfilled ones, since a winner is usually chosen after the spots are
+      // fulfilled. Drives the "🏆 WINNER" banner on the overlay.
+      winner: (active.entries.find((e) => e.winner) || {}).buyer || null,
       // Public overlay: drop spots already fulfilled and renumber, so viewers
       // see only who's still up. (The admin keeps the fulfilled ones visible.)
       entries: active.entries.filter((e) => !e.fulfilled).map((e, i) => ({
-        position: i + 1, buyer: e.buyer, spots: e.spots, source: srcShort(e.source),
+        position: i + 1, buyer: e.buyer, spots: e.spots, source: srcShort(e.source), winner: !!e.winner,
       })),
     } : null,
     queue: live
