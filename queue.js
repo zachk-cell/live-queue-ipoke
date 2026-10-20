@@ -2006,6 +2006,13 @@ export class QueueEngine extends EventEmitter {
       isPriority: (Number(o.total) || 0) >= PRIORITY_DOLLARS,
       fullName: o.fullName || '',
       shipping: o.shipping || null,
+      // Parity with Rip-Live slots so the Ship-Sealed label can carry the same
+      // variables: the Vault "V" tag, and the "earlier orders today" heads-up
+      // (count of this buyer's already-fulfilled Rip-Live orders).
+      hasVault: this._orderHasVault({ items: o.items || [] }),
+      priorFulfilled: [...this.orders.values()].filter(
+        (x) => x.buyerId === o.buyerId && x.status === 'fulfilled',
+      ).length,
     }));
   }
 

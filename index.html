@@ -941,27 +941,48 @@
     }catch(_){ return false; }
   }
 
-  async function printLabel(key){
-    const e = (state.queue||[]).find(x=>x.key===key);
-    if(!e) return;
+  async function printLabel(scope, key){
+    // Back-compat: older Rip-Live calls pass just the key (printLabel(key)).
+    if(key===undefined){ key=scope; scope='queue'; }
+    // Normalize every field the label needs from either a Rip-Live slot (scope
+    // 'queue') or a Ship-Sealed order (scope 'sealed') so both print the SAME label.
+    let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, lastId='',
+        srcTag='', srcShortCode='', hasVault=false, oid='';
+    if(scope==='sealed'){
+      const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
+      uname=s.buyer||'Buyer';
+      const ord=s.orderName||(s.id?('#'+shortId(s.id)):'');
+      ords=ord?[ord]:[];
+      priorFulfilled=Number(s.priorFulfilled)||0;
+      dupe=(state.sealed||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==s.buyerId);
+      lastId=String(s.buyerId||s.id||'');
+      srcTag=srcShort(s.source); srcShortCode=srcTag;
+      hasVault=!!s.hasVault;
+      oid=String(s.id||'');
+    } else {
+      const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
+      uname=e.buyer||'Buyer';
+      ords=orderNoList(e);
+      countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
+      priorFulfilled=Number(e.priorFulfilled)||0;
+      dupe=(state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
+      lastId=String(e.buyerId||'');
+      srcTag=e.sourceShort||''; srcShortCode=e.sourceShort||'';
+      hasVault=!!e.hasVault;
+      oid=String((e.orderIds||[])[0]||'');
+    }
     // International (Shopify, shipping outside the USA): add a Q:/V: customs note box
     // at the bottom-left for the team to fill in by hand.
-    const intl = await orderIsInternational(e.sourceShort, (e.orderIds||[])[0]);
-    const uname = e.buyer || 'Buyer';
-    const ords = orderNoList(e);
+    const intl = await orderIsInternational(srcShortCode, oid);
     const ordLine = ords.join('   ');
-    const countLine = (e.orderCount>1) ? (e.orderCount+' orders in this batch') : '';
     // Thermal printers only lay down BLACK, and browsers skip background fills
     // unless "Background graphics" is on — so flags are black text in a black
     // outline (no fill, no emoji) to guarantee they print. Multiple can stack.
     const flags = [];
-    if(e.priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
-    // Same-name distinction: if another buyer in the queue shares this exact
+    if(priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
+    // Same-name distinction: if another buyer in the section shares this exact
     // display name, print a last-4 id tag so the right bag goes to the right person.
-    const dupe = (state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
-    const idTag = dupe ? ('id …'+String(e.buyerId||'').slice(-4)) : '';
-    // Source tag (bottom-right): TT = TikTok order, SF = Shopify (web) order.
-    const srcTag = e.sourceShort || '';
+    const idTag = dupe ? ('id …'+lastId.slice(-4)) : '';
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       @page{size:2.25in 1.25in;margin:0}
       html,body{margin:0;padding:0;width:2.25in;height:1.25in}
@@ -992,7 +1013,7 @@
       ${idTag?`<div class="idtag">${esc(idTag)}</div>`:''}
       ${countLine?`<div class="count">${esc(countLine)}</div>`:''}
       ${ordLine?`<div class="ord" id="o">${esc(ordLine)}</div>`:''}
-      ${(srcTag||e.hasVault)?`<div class="corner">${e.hasVault?`<span class="vtag">V</span>`:''}${srcTag?`<span class="srctag">${esc(srcTag)}</span>`:''}</div>`:''}
+      ${(srcTag||hasVault)?`<div class="corner">${hasVault?`<span class="vtag">V</span>`:''}${srcTag?`<span class="srctag">${esc(srcTag)}</span>`:''}</div>`:''}
       ${intl?`<div class="customs"><div class="cl">Q:</div><div class="cl cl2">V:</div></div>`:''}
       <script>(function(){
         function shrinkWidth(el,start,min){var s=start;el.style.fontSize=s+'px';
@@ -1371,7 +1392,7 @@
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<div class="slotbtns">`
       + `<button class="caret" title="Show/hide every item in this order" onclick="toggleExpand('${e.key}')">▸</button>`
-      + `<button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('${e.key}')">🏷 Label</button>`
+      + `<button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('queue','${e.key}')">🏷 Label</button>`
       + `<button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('queue','${e.key}')">📦 Packing</button>`
       + `<div class="money">${money(e.total)}</div>`
       + `<div class="actions">${manualActions}${unpinBtn}${ipokeActions}${(e.bumped||e.position===1)?'':`<button class="bumpb" title="Bump to top" onclick="bump('${e.key}')">▲</button>`}`
@@ -1922,6 +1943,7 @@
           <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
             <div class="items">${esc(itemStr)}</div></div>
           <button class="sealcaret" title="Show/hide this order's items (move an item to Rip-Live)" onclick="toggleSealExpand('${s.id}')">▸</button>
+          <button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('sealed','${s.id}')">🏷 Label</button>
           <button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
           <button class="sealdone" title="Mark this order packed &amp; shipped" onclick="sealedFulfill('${s.id}',true)">✓ Shipped</button>
           <button class="removeb" title="Remove from the Ship-Sealed queue (cancelled/refunded)" onclick="sealedRemove('${s.id}')">✕</button>
