@@ -228,6 +228,10 @@ export function normalizeShopifyOrder(o) {
       sku: li.sku || '',
       variant: variant || '',
       qty: Number(li.quantity) || 1,
+      // Per-line merchandise value (after line-level discounts). Lets the
+      // Ship-Sealed panel show the value of JUST the sealed items when an order
+      // is split across Rip-Live / Ship-Sealed / an event.
+      lineTotal: money(li.discountedTotalSet || li.originalTotalSet),
     };
   }).filter((it) => !isTipItem(it.name));
   const orderId = 'shop:' + numericId(o.id);
@@ -287,7 +291,7 @@ const ORDER_FIELDS = `
   currentTotalPriceSet { shopMoney { amount } }
   totalPriceSet { shopMoney { amount } }
   customer { id firstName lastName displayName email }
-  lineItems(first: 50) { nodes { title variantTitle quantity sku } }
+  lineItems(first: 50) { nodes { title variantTitle quantity sku discountedTotalSet { shopMoney { amount } } originalTotalSet { shopMoney { amount } } } }
 `;
 
 async function fetchOrdersMatching(searchQuery, limit = 50) {

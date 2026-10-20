@@ -277,6 +277,7 @@
   .sealrow{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
   .sealrow .sealmain{display:flex;align-items:center;gap:12px;padding:10px 14px}
   .sealrow .who{flex:1;min-width:0}
+  .sealrow .money{flex:none;color:var(--pri)}
   .sealrow .items{color:var(--muted);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Inline expand: full item list revealed under a sealed row, each with a "Rip Live" move button */
   .sealcaret{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;
@@ -1988,6 +1989,7 @@
           <div class="pos">${s.position}</div>
           <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
             <div class="items">${esc(itemStr)}</div></div>
+          <div class="money" title="Value of the sealed items in this order${s.sealedTotal!=null?'':' (full order total — per-item value not available for this order yet)'}">${money(s.sealedTotal!=null?s.sealedTotal:s.total)}</div>
           <button class="sealcaret" title="Show/hide this order's items (move an item to Rip-Live)" onclick="toggleSealExpand('${s.id}')">▸</button>
           <button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('sealed','${s.id}')">🏷 Label</button>
           <button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>

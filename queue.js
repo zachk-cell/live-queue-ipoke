@@ -2046,12 +2046,25 @@ export class QueueEngine extends EventEmitter {
   /** Add (or refresh) an order's Ship-Sealed slot. One record per order id — no
    *  combining, since each order is pulled, packed and shipped on its own. The
    *  record carries the FULL order total so the $1000 priority applies here too. */
+  /** Merchandise value of just the sealed line items (after line discounts), so a
+   *  split order shows the Ship-Sealed portion rather than the whole order total.
+   *  Returns null when the line items carry no price data (older orders / non-
+   *  Shopify sources) so callers can fall back to the full order total. */
+  _sealedItemsValue(items) {
+    const list = items || [];
+    if (!list.some((it) => Number(it.lineTotal) > 0)) return null;
+    const sum = list.reduce((s, it) => s + (Number(it.lineTotal) || 0), 0);
+    return Math.round(sum * 100) / 100;
+  }
+
   _addSealedSlot(id, raw, items) {
     const sid = String(id);
     const existing = this.sealedOrders.get(sid);
     if (existing) {
       existing.items = items;
       existing.total = Number(raw.total != null ? raw.total : existing.total) || 0;
+      const sv = this._sealedItemsValue(items);
+      if (sv != null) existing.sealedTotal = sv;
       if (raw.buyer) existing.buyer = raw.buyer;
       if (raw.orderName) existing.orderName = raw.orderName;
       return existing;
@@ -2063,6 +2076,8 @@ export class QueueEngine extends EventEmitter {
       buyerHandle: raw.buyerHandle || '',
       items,
       total: Number(raw.total || 0),
+      // Value of just these sealed items (null when unknown → UI falls back to total).
+      sealedTotal: this._sealedItemsValue(items),
       createdAt: raw.createdAt || Date.now(),
       receivedAt: Date.now(),
       status: 'queued',
@@ -2096,6 +2111,8 @@ export class QueueEngine extends EventEmitter {
       items: o.items || [],
       itemCount: (o.items || []).reduce((n, it) => n + (Number(it.qty) || 1), 0),
       total: Number(o.total) || 0,
+      // Value of just the sealed items (for the money column); null → UI shows total.
+      sealedTotal: (o.sealedTotal != null ? Number(o.sealedTotal) : null),
       source: o.source || '',
       orderName: o.orderName || '',
       createdAt: o.createdAt || null,
