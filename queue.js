@@ -78,6 +78,11 @@ export class QueueEngine extends EventEmitter {
     this.openBatch = new Map(); // buyerId -> current open batchKey (or absent)
     this.batchCounter = 0;
     this.priorityItems = []; // array of lowercased substrings that trigger priority
+    // Configurable priority settings (editable from the admin "Priority Settings"
+    // lightbox). The money threshold and each metric can be toggled on/off.
+    this.priorityMoneyThreshold = PRIORITY_DOLLARS; // $ at/above which an order jumps the queue
+    this.priorityKeywordsOn = true;  // keyword metric active?
+    this.priorityMoneyOn = true;     // $-threshold metric active?
     this.trackedVariants = []; // [{ id, label, product, variant }] — per-variant sales counters
     this.variantCounts = {}; // { [variantId]: number } — units counted when a slot hits the top
     this.variantLog = []; // audit trail of manual counter edits/resets (most recent first)
@@ -183,6 +188,13 @@ export class QueueEngine extends EventEmitter {
       if (fs.existsSync(CONFIG_FILE)) {
         const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
         this.priorityItems = (cfg.priorityItems || []).map((s) => s.toLowerCase());
+        // Priority settings (optional / backward compatible — default to the
+        // historical behavior: $1000 threshold, both metrics on).
+        if (Number.isFinite(cfg.priorityMoneyThreshold) && cfg.priorityMoneyThreshold >= 0) {
+          this.priorityMoneyThreshold = cfg.priorityMoneyThreshold;
+        }
+        if (typeof cfg.priorityKeywordsOn === 'boolean') this.priorityKeywordsOn = cfg.priorityKeywordsOn;
+        if (typeof cfg.priorityMoneyOn === 'boolean') this.priorityMoneyOn = cfg.priorityMoneyOn;
         this.trackedVariants = Array.isArray(cfg.trackedVariants) ? cfg.trackedVariants : [];
         this.variantCounts = (cfg.variantCounts && typeof cfg.variantCounts === 'object') ? cfg.variantCounts : {};
         this.variantLog = Array.isArray(cfg.variantLog) ? cfg.variantLog : [];
@@ -676,6 +688,9 @@ export class QueueEngine extends EventEmitter {
         CONFIG_FILE,
         JSON.stringify({
           priorityItems: this.priorityItems,
+          priorityMoneyThreshold: this.priorityMoneyThreshold,
+          priorityKeywordsOn: this.priorityKeywordsOn,
+          priorityMoneyOn: this.priorityMoneyOn,
           trackedVariants: this.trackedVariants,
           variantCounts: this.variantCounts,
           variantLog: this.variantLog,
@@ -1067,22 +1082,36 @@ export class QueueEngine extends EventEmitter {
     const priorFulfilled = [...this.orders.values()].filter(
       (o) => o.buyerId === first.buyerId && o.status === 'fulfilled'
     ).length;
-    const priorityOrders = orders.filter((o) => o.hasPriority);
-    const keywordPriority = priorityOrders.length > 0;
+    // Priority is evaluated LIVE from the configurable settings (keyword list, $
+    // threshold, and each metric's on/off switch), EXCEPT where an order carries a
+    // freeze lock. A lock ({ kw, big }) is stamped by a "Save for new orders only"
+    // settings change so that order keeps its standing regardless of the new
+    // settings; "Apply to current queue" clears locks so everything re-evaluates.
+    const isLocked = (o) => o.priorityLock && typeof o.priorityLock === 'object';
+    const lockedOrders = orders.filter(isLocked);
+    const liveOrders = orders.filter((o) => !isLocked(o));
+    // Keyword metric: any locked order frozen as keyword-priority, OR (when the
+    // keyword metric is on) any live order whose items matched the keyword list.
+    const liveKeywordOrders = this.priorityKeywordsOn ? liveOrders.filter((o) => o.hasPriority) : [];
+    const keywordPriority = lockedOrders.some((o) => o.priorityLock.kw) || liveKeywordOrders.length > 0;
     // Manual adds can be flagged priority by an admin toggle (no items/$ to go on).
     const manualPriority = orders.some((o) => o.manualPriority);
-    // (#7) $1000 rule: the FULL pre-split order total drives this — o.total is the
-    // whole Shopify order value (never reduced by the event/sealed split), so the
+    // $ rule: the FULL pre-split order total drives this — o.total is the whole
+    // Shopify order value (never reduced by the event/sealed split), so the live
     // batch sum here is the combined pre-split total. A single order or a manually
-    // combined batch at/above $1000 jumps the queue. (Event seat positions are
-    // never affected — they sort purely by purchase time in eventQueue.)
+    // combined batch at/above the threshold jumps the queue. (Event seat positions
+    // are never affected — they sort purely by purchase time in eventQueue.)
     const batchTotal = orders.reduce((s, o) => s + (Number(o.total) || 0), 0);
-    const bigDollar = batchTotal >= PRIORITY_DOLLARS;
+    const liveTotal = liveOrders.reduce((s, o) => s + (Number(o.total) || 0), 0);
+    const liveBig = this.priorityMoneyOn && liveTotal >= this.priorityMoneyThreshold;
+    const bigDollar = lockedOrders.some((o) => o.priorityLock.big) || liveBig;
     const isPriority = keywordPriority || bigDollar || manualPriority;
     // Among priority slots, keep time order: keyword-priority keeps its earliest
-    // priority-item time; a $1000 or manually-flagged slot uses its first order time.
+    // priority-item time; a $-threshold or manually-flagged slot uses its first
+    // order time. Locked keyword orders count toward the earliest-time calc too.
+    const keywordTimeOrders = lockedOrders.filter((o) => o.priorityLock.kw).concat(liveKeywordOrders);
     const priorityAt = keywordPriority
-      ? Math.min(...priorityOrders.map((o) => o.createdAt))
+      ? Math.min(...keywordTimeOrders.map((o) => o.createdAt || Date.now()))
       : ((bigDollar || manualPriority) ? (first.createdAt || Date.now()) : Infinity);
 
     // Merge item lines (sum quantities of same-name items).
@@ -1541,6 +1570,71 @@ export class QueueEngine extends EventEmitter {
     this.emit('change', { reason: 'priority-config', priorityItems: this.priorityItems });
   }
 
+  /** Public, serializable view of the current priority settings (for the admin UI). */
+  prioritySettingsPublic() {
+    return {
+      keywords: this.priorityItems,
+      moneyThreshold: this.priorityMoneyThreshold,
+      keywordsOn: this.priorityKeywordsOn,
+      moneyOn: this.priorityMoneyOn,
+    };
+  }
+
+  /** Update the priority settings (keywords, $ threshold, and each metric's on/off
+   *  switch) in one shot, from the admin "Priority Settings" lightbox.
+   *
+   *  mode === 'apply':    re-evaluate the WHOLE current queue under the new
+   *                       settings — promotes items that now qualify, demotes ones
+   *                       that no longer do (back to their natural time position).
+   *                       All freeze locks are cleared.
+   *  mode === 'continue': save the settings but DON'T disturb the current queue —
+   *                       every queued order is frozen at its current standing, so
+   *                       only future orders are judged by the new settings.
+   */
+  setPrioritySettings(opts = {}, mode = 'continue') {
+    const nextKeywords = Array.isArray(opts.keywords)
+      ? opts.keywords.map((s) => String(s).trim().toLowerCase()).filter(Boolean)
+      : this.priorityItems;
+    let threshold = Number(opts.moneyThreshold);
+    if (!isFinite(threshold) || threshold < 0) threshold = this.priorityMoneyThreshold;
+    threshold = Math.round(threshold * 100) / 100;
+    const kwOn = (opts.keywordsOn != null) ? !!opts.keywordsOn : this.priorityKeywordsOn;
+    const moneyOn = (opts.moneyOn != null) ? !!opts.moneyOn : this.priorityMoneyOn;
+
+    if (mode === 'continue') {
+      // Freeze every currently-queued order at its CURRENT standing, judged by the
+      // settings as they are RIGHT NOW (before we overwrite them below). Orders
+      // already frozen keep their existing lock. Money is captured per order (the
+      // common iPoke case is one order per slot, so this matches the batch total).
+      for (const o of this.orders.values()) {
+        if (o.status !== 'queued') continue;
+        if (o.priorityLock && typeof o.priorityLock === 'object') continue;
+        const kw = this.priorityKeywordsOn && !!o.hasPriority;
+        const big = this.priorityMoneyOn && (Number(o.total) || 0) >= this.priorityMoneyThreshold;
+        o.priorityLock = { kw, big };
+      }
+    } else {
+      // 'apply' — drop all freezes so the whole queue re-evaluates live.
+      for (const o of this.orders.values()) {
+        if (o.priorityLock != null) o.priorityLock = null;
+      }
+    }
+
+    // Commit the new settings.
+    this.priorityItems = nextKeywords;
+    this.priorityMoneyThreshold = threshold;
+    this.priorityKeywordsOn = kwOn;
+    this.priorityMoneyOn = moneyOn;
+    // Re-stamp keyword matches from the new list. Locked orders ignore this (their
+    // frozen bits govern); unlocked + future orders use it.
+    for (const o of this.orders.values()) o.hasPriority = this._isPriorityOrder(o.items);
+
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'priority-settings', mode });
+    return this.prioritySettingsPublic();
+  }
+
   /** Archive the current stream (fulfilled + cancelled + still-unfulfilled) to
    *  history, if it had any activity. Does NOT clear the board — callers do. */
   _archiveCurrentStream() {
@@ -1781,7 +1875,7 @@ export class QueueEngine extends EventEmitter {
       fulfilled: this.fulfilledSlots().slice(0, 50),
       cancelled: this.cancelledSlots().slice(0, 50),
       stats: this.stats(),
-      config: { priorityItems: this.priorityItems },
+      config: { priorityItems: this.priorityItems, priority: this.prioritySettingsPublic() },
       variants: this.trackedVariants.map((v) => ({
         id: v.id, label: v.label, product: v.product, variant: v.variant,
         chase: v.chase || '',
@@ -1986,9 +2080,11 @@ export class QueueEngine extends EventEmitter {
    *  Queued records only (packed/shipped ones drop off). */
   sealedQueue() {
     const list = [...this.sealedOrders.values()].filter((o) => o.status === 'queued');
+    const moneyOn = this.priorityMoneyOn;
+    const threshold = this.priorityMoneyThreshold;
     list.sort((a, b) => {
-      const pa = (Number(a.total) || 0) >= PRIORITY_DOLLARS ? 1 : 0;
-      const pb = (Number(b.total) || 0) >= PRIORITY_DOLLARS ? 1 : 0;
+      const pa = (moneyOn && (Number(a.total) || 0) >= threshold) ? 1 : 0;
+      const pb = (moneyOn && (Number(b.total) || 0) >= threshold) ? 1 : 0;
       if (pa !== pb) return pb - pa;
       return (a.createdAt || 0) - (b.createdAt || 0);
     });
@@ -2003,7 +2099,7 @@ export class QueueEngine extends EventEmitter {
       source: o.source || '',
       orderName: o.orderName || '',
       createdAt: o.createdAt || null,
-      isPriority: (Number(o.total) || 0) >= PRIORITY_DOLLARS,
+      isPriority: moneyOn && (Number(o.total) || 0) >= threshold,
       fullName: o.fullName || '',
       shipping: o.shipping || null,
       // Parity with Rip-Live slots so the Ship-Sealed label can carry the same

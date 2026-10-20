@@ -372,6 +372,21 @@ app.post('/api/priority-items', requireAuth, (req, res) => {
   queue.setPriorityItems(req.body.items || []);
   res.json({ ok: true, priorityItems: queue.priorityItems });
 });
+// Full priority settings (keywords + $ threshold + each metric's on/off switch).
+// body: { keywords:[...], moneyThreshold, keywordsOn, moneyOn, mode:'apply'|'continue' }
+//  - 'apply'    re-evaluates the whole current queue under the new settings
+//  - 'continue' saves the settings but freezes the current queue (future orders only)
+app.post('/api/priority-settings', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const mode = b.mode === 'apply' ? 'apply' : 'continue';
+  const priority = queue.setPrioritySettings({
+    keywords: b.keywords,
+    moneyThreshold: b.moneyThreshold,
+    keywordsOn: b.keywordsOn,
+    moneyOn: b.moneyOn,
+  }, mode);
+  res.json({ ok: true, priority });
+});
 app.post('/api/reset', requireAuth, (_req, res) => { queue.reset(); res.json({ ok: true }); });
 // Per-variant counters: replace the tracked-variant definitions, or manually
 // correct a single counter. Both admin only.

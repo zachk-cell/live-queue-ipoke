@@ -143,6 +143,19 @@
   .ov-sec .ov-color{width:100%;height:34px;padding:2px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;cursor:pointer;margin-bottom:4px}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
   .chip{background:var(--pri-bg);color:var(--pri);border:1px solid var(--pri);border-radius:20px;padding:3px 10px;font-size:12px}
+  .chip.off{opacity:.38;text-decoration:line-through}
+  /* Priority Settings lightbox: one panel per metric, each with its own on/off. */
+  .pset{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:12px}
+  .pset-toggle{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:700;color:var(--text);cursor:pointer;user-select:none}
+  .pset-toggle input{width:17px;height:17px;accent-color:var(--accent);cursor:pointer;flex:none}
+  .pset-hint{color:var(--muted);font-size:12px;margin:7px 0;line-height:1.35}
+  .pset-money{display:flex;align-items:center;gap:7px}
+  .pset-money .pset-cur{font-size:17px;font-weight:800;color:var(--pri)}
+  .pset-money input{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:9px;
+    padding:9px 10px;font-size:14px;font-family:inherit}
+  .psave{background:#12303a;color:#7fdce8;border:1px solid #2a6b82;border-radius:9px;padding:8px 14px;
+    font-size:13px;font-weight:700;cursor:pointer}
+  .psave:hover{filter:brightness(1.15)}
   .livebadge{font-size:10px;font-weight:800;letter-spacing:.6px;padding:3px 8px;border-radius:20px;
     background:#3a2020;color:#ff8b8b;vertical-align:middle;margin-left:6px}
   .livebadge.on{background:#12331f;color:#43e08a;box-shadow:0 0 8px rgba(67,224,138,.4)}
@@ -487,7 +500,7 @@
   <div class="toolbar">
     <button id="liveBtn" class="livebtn" onclick="toggleLive()">● Go Live</button>
     <input id="search" placeholder="Search buyer or order # (full or last digits)…" oninput="render()" />
-    <button class="ghost" onclick="openPriority()">⭐ Priority items</button>
+    <button class="ghost" onclick="openPriority()">⭐ Priority settings</button>
     <a href="{{ADMIN}}/history" style="text-decoration:none"><button class="ghost">🗂 Past Days ↗</button></a>
     <a href="/" target="_blank" style="text-decoration:none"><button class="ghost">Public view ↗</button></a>
     <button id="combinePill" class="combine-pill" style="display:none" onclick="openCombine()">⇄ Combining: <span class="cm" id="cm-label">…</span></button>
@@ -563,13 +576,26 @@
 
 <div class="modal" id="modal">
   <div class="card">
-    <h3>Priority items</h3>
-    <p>Any order containing one of these (matched inside the item name or SKU) jumps to the top of the queue. One per line. Example: <em>break</em>, <em>slab</em>, <em>PSA 10</em>.</p>
-    <textarea id="pri-input" placeholder="break&#10;slab&#10;box break"></textarea>
-    <label class="prichk"><input type="checkbox" id="pri-show-chips" onchange="togglePriChips()" checked> Show the active keyword chips on the admin page</label>
+    <h3>Priority Settings</h3>
+    <p>What sends an order to the top of the Rip-Live queue. Turn each trigger on or off and set its values. When you save, choose <em>Apply to queue</em> to re-sort the orders already in the queue now, or <em>new orders only</em> to leave the current queue exactly as it is and judge only future orders by the new rules.</p>
+
+    <div class="pset">
+      <label class="pset-toggle"><input type="checkbox" id="pri-kw-on" onchange="syncPriEnabled()"> Keyword priority</label>
+      <p class="pset-hint">Any order whose item name or SKU contains one of these jumps the queue. One per line. Example: <em>break</em>, <em>slab</em>, <em>PSA 10</em>.</p>
+      <textarea id="pri-input" placeholder="break&#10;slab&#10;box break"></textarea>
+    </div>
+
+    <div class="pset">
+      <label class="pset-toggle"><input type="checkbox" id="pri-money-on" onchange="syncPriEnabled()"> Dollar priority</label>
+      <p class="pset-hint">Any order at or above this total (combined batch total) jumps the queue.</p>
+      <div class="pset-money"><span class="pset-cur">$</span><input type="number" id="pri-money" min="0" step="1" placeholder="1000"></div>
+    </div>
+
+    <label class="prichk"><input type="checkbox" id="pri-show-chips" onchange="togglePriChips()" checked> Show the active priority chips on the admin page</label>
     <div class="row">
       <button class="ghost" onclick="closePriority()">Cancel</button>
-      <button class="primary" onclick="savePriority()">Save</button>
+      <button class="psave" onclick="savePriority('continue')" title="Save these settings but DON'T touch the current queue — only new orders are judged by the new rules.">Save — new orders only</button>
+      <button class="primary" onclick="savePriority('apply')" title="Save and re-sort the current queue now: promote items that now qualify, demote ones that no longer do (back to their time position).">Save &amp; apply to queue</button>
     </div>
   </div>
 </div>
@@ -1247,15 +1273,35 @@
     const box = document.getElementById('pri-chips'); if(box) box.style.display = hidden ? 'none' : '';
   }
   function openPriority(){
-    document.getElementById('pri-input').value = (state.config.priorityItems||[]).join('\n');
+    const p = (state.config && state.config.priority) || {};
+    document.getElementById('pri-input').value = (p.keywords||state.config.priorityItems||[]).join('\n');
+    document.getElementById('pri-kw-on').checked = (p.keywordsOn !== false);
+    document.getElementById('pri-money-on').checked = (p.moneyOn !== false);
+    document.getElementById('pri-money').value = (p.moneyThreshold!=null ? p.moneyThreshold : 1000);
     applyPriChipsPref();
+    syncPriEnabled();
     document.getElementById('modal').classList.add('open');
   }
   function closePriority(){ document.getElementById('modal').classList.remove('open'); }
-  async function savePriority(){
-    const items = document.getElementById('pri-input').value.split('\n').map(s=>s.trim()).filter(Boolean);
-    await fetch('/api/priority-items',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({items})});
-    closePriority();
+  // Dim/disable each metric's input when that metric is switched off.
+  function syncPriEnabled(){
+    const kwOn = document.getElementById('pri-kw-on').checked;
+    const mOn  = document.getElementById('pri-money-on').checked;
+    const ta = document.getElementById('pri-input'); if(ta){ ta.disabled=!kwOn; ta.style.opacity=kwOn?'1':'.45'; }
+    const mi = document.getElementById('pri-money'); if(mi){ mi.disabled=!mOn; mi.style.opacity=mOn?'1':'.45'; }
+  }
+  // mode: 'apply' = re-sort the current queue now · 'continue' = save for new orders only.
+  async function savePriority(mode){
+    const keywords = document.getElementById('pri-input').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    const keywordsOn = document.getElementById('pri-kw-on').checked;
+    const moneyOn = document.getElementById('pri-money-on').checked;
+    let moneyThreshold = Number(String(document.getElementById('pri-money').value).replace(/[^0-9.]/g,''));
+    if(!isFinite(moneyThreshold) || moneyThreshold<0) moneyThreshold=0;
+    try{
+      await fetch('/api/priority-settings',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({ keywords, moneyThreshold, keywordsOn, moneyOn, mode:(mode==='apply'?'apply':'continue') })});
+      closePriority();
+    }catch{ alert("Couldn't save priority settings — check your connection and try again."); }
   }
 
   // --- In-place list rendering so updates don't flash ---
@@ -2036,10 +2082,17 @@
     document.getElementById('s-avgt').textContent = fmtDur(st.avgFulfillmentMs);
 
     const chips = document.getElementById('pri-chips');
-    const chipSig = (state.config.priorityItems||[]).join('|');
+    const pcfg = (state.config && state.config.priority) || {};
+    const kwOn = (pcfg.keywordsOn !== false);
+    const mOn  = (pcfg.moneyOn !== false);
+    const thr  = (pcfg.moneyThreshold!=null ? pcfg.moneyThreshold : 1000);
+    const kws  = state.config.priorityItems||[];
+    const chipSig = kws.join('|')+'~'+(kwOn?'1':'0')+'~'+(mOn?'1':'0')+'~'+thr;
     if(chips._sig !== chipSig){
       chips._sig = chipSig;
-      chips.innerHTML = (state.config.priorityItems||[]).map(p=>`<span class="chip">⭐ ${esc(p)}</span>`).join('');
+      const kwChips = kws.map(p=>`<span class="chip${kwOn?'':' off'}">⭐ ${esc(p)}</span>`).join('');
+      const moneyChip = `<span class="chip${mOn?'':' off'}" title="Orders at or above this total jump the queue">💰 $${esc(String(thr))}+</span>`;
+      chips.innerHTML = kwChips + moneyChip;
       applyPriChipsPref();
     }
 
