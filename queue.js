@@ -2038,15 +2038,16 @@ export class QueueEngine extends EventEmitter {
 
   // ── Ship-Sealed side-queue (iPoke, internal pull/pack/ship) ────────────────
   /** True if a line item belongs in the Ship-Sealed queue. Matches "ship sealed"
-   *  AND "shipped sealed" (the store's actual wording), tolerant of a space,
-   *  hyphen or underscore between the words. Case-insensitive. */
+   *  / "shipped sealed" (the store's actual wording) AND "Slowpoke Stash" — all
+   *  tolerant of a space, hyphen or underscore between the words. Case-insensitive. */
   _isSealedItem(it) {
     // TikTok giveaway items (tagged on ingest: the $0 Penny Sleeves Pro Support
     // accessory) are RIPPED LIVE, not shipped sealed — even though their title
     // literally says "Shipped Sealed". The giveaway tag overrides the name match
     // so these route to the rip-live active queue under "TikTok Giveaway".
     if (it && it.giveaway) return false;
-    return /ship(?:ped)?[\s\-_]*sealed/i.test(String((it && it.name) || ''));
+    const name = String((it && it.name) || '');
+    return /ship(?:ped)?[\s\-_]*sealed/i.test(name) || /slowpoke[\s\-_]*stash/i.test(name);
   }
 
   /** True if a line item is a Shopify checkout "Tip" line (exact title), which we
