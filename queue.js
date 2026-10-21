@@ -1475,6 +1475,26 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Set the dollar total for a whole SLOT (the number shown in the money column).
+   *  The slot total is the sum of its orders' totals, so we put the full amount on
+   *  the slot's first order and zero the rest — matching how a single combined total
+   *  is edited. Local only; does not change Shopify. */
+  setSlotTotal(batchKey, total) {
+    const orders = [...this.orders.values()]
+      .filter((o) => o.batchKey === String(batchKey) && o.status === 'queued')
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    if (!orders.length) return false;
+    let amt = Number(total);
+    if (!isFinite(amt) || amt < 0) amt = 0;
+    amt = Math.round(amt * 100) / 100;
+    orders[0].total = amt;
+    for (let i = 1; i < orders.length; i++) orders[i].total = 0;
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'slot-total-edit', batchKey: String(batchKey) });
+    return true;
+  }
+
   /** Toggle an admin "priority" flag on a manual slot — shows the PRIORITY badge
    *  and sorts it in the priority tier. Independent of the item-keyword and $1000
    *  rules (a manual add has no real items/total). The slot's explicit pinned

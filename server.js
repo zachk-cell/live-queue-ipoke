@@ -357,6 +357,10 @@ app.post('/api/order/:id/items', requireAuth, (req, res) => {
 app.post('/api/order/:id/total', requireAuth, (req, res) => {
   res.json({ ok: queue.setOrderTotal(req.params.id, (req.body && req.body.total)) });
 });
+// Set a whole SLOT's dollar total (the combined number in the money column) → { total }.
+app.post('/api/slot/:key/total', requireAuth, (req, res) => {
+  res.json({ ok: queue.setSlotTotal(req.params.key, (req.body && req.body.total)) });
+});
 // Set/clear a manual slot's order number → { orderName }.
 app.post('/api/manual-order/:key/order-name', requireAuth, (req, res) => {
   res.json({ ok: queue.setManualQueueOrderName(req.params.key, (req.body && req.body.orderName) || '') });
