@@ -2091,18 +2091,14 @@ export class QueueEngine extends EventEmitter {
     return rec;
   }
 
-  /** The internal Ship-Sealed queue: $1000+ orders first, then oldest-first.
-   *  Queued records only (packed/shipped ones drop off). */
+  /** The internal Ship-Sealed queue: a pure pull/pack list sorted ONLY by time
+   *  received — NEWEST on top, oldest on the bottom. Unlike the Rip-Live queue it
+   *  deliberately ignores priority / $-threshold / keywords, so nothing ever jumps
+   *  the line here. Queued records only (packed/shipped ones drop off). */
   sealedQueue() {
     const list = [...this.sealedOrders.values()].filter((o) => o.status === 'queued');
-    const moneyOn = this.priorityMoneyOn;
-    const threshold = this.priorityMoneyThreshold;
-    list.sort((a, b) => {
-      const pa = (moneyOn && (Number(a.total) || 0) >= threshold) ? 1 : 0;
-      const pb = (moneyOn && (Number(b.total) || 0) >= threshold) ? 1 : 0;
-      if (pa !== pb) return pb - pa;
-      return (a.createdAt || 0) - (b.createdAt || 0);
-    });
+    // Newest received first (descending by order time).
+    list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     return list.map((o, i) => ({
       id: o.id,
       position: i + 1,
@@ -2116,7 +2112,8 @@ export class QueueEngine extends EventEmitter {
       source: o.source || '',
       orderName: o.orderName || '',
       createdAt: o.createdAt || null,
-      isPriority: moneyOn && (Number(o.total) || 0) >= threshold,
+      // Ship-Sealed never uses priority — it's a straight time-ordered list.
+      isPriority: false,
       fullName: o.fullName || '',
       shipping: o.shipping || null,
       // Parity with Rip-Live slots so the Ship-Sealed label can carry the same
