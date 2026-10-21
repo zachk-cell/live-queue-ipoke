@@ -348,6 +348,15 @@ app.post('/api/manual-order/:key/position', requireAuth, (req, res) => {
 app.post('/api/manual-order/:key/items', requireAuth, (req, res) => {
   res.json({ ok: queue.setManualQueueItems(req.params.key, (req.body && req.body.items)) });
 });
+// Edit a REAL order's line items (rename / add / remove) → { items }. Local only
+// (updates packing slip / labels / vault), does not touch Shopify.
+app.post('/api/order/:id/items', requireAuth, (req, res) => {
+  res.json({ ok: queue.setOrderItems(req.params.id, (req.body && req.body.items)) });
+});
+// Set a REAL order's dollar total → { total }.
+app.post('/api/order/:id/total', requireAuth, (req, res) => {
+  res.json({ ok: queue.setOrderTotal(req.params.id, (req.body && req.body.total)) });
+});
 // Set/clear a manual slot's order number → { orderName }.
 app.post('/api/manual-order/:key/order-name', requireAuth, (req, res) => {
   res.json({ ok: queue.setManualQueueOrderName(req.params.key, (req.body && req.body.orderName) || '') });

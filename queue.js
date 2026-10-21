@@ -1194,6 +1194,8 @@ export class QueueEngine extends EventEmitter {
             items: [...m.entries()].map(([name, qty]) => ({ name, qty })),
             addedSinceTop: !!o.mergedWhileTop,
             createdAt: o.createdAt || null,
+            // Per-order dollar total, so the expanded editor can pre-fill it.
+            total: Number(o.total) || 0,
           };
         }),
       items,
@@ -1439,6 +1441,37 @@ export class QueueEngine extends EventEmitter {
     for (const o of orders) { o.items = parsed; }
     this._persist();
     this.emit('change', { reason: 'manual-queue-items', batchKey: String(batchKey) });
+    return true;
+  }
+
+  /** Edit a REAL (non-manual) order's line items in place — rename, add or remove
+   *  lines — for when a buyer swaps what they bought. Keeps the order's number,
+   *  buyer, position and status; only the items change. The keyword-priority flag
+   *  is re-derived from the new items so a swapped-in/out priority item is honored.
+   *  This is LOCAL to the queue (packing slip / labels / vault tag update); it does
+   *  NOT change the order in Shopify. */
+  setOrderItems(orderId, items) {
+    const o = this.orders.get(String(orderId));
+    if (!o || o.status !== 'queued') return false;
+    o.items = this._parseItemsText(items);
+    o.hasPriority = this._isPriorityOrder(o.items);
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'order-items-edit', orderId: String(orderId) });
+    return true;
+  }
+
+  /** Set a REAL order's dollar total (drives the money column and the $-threshold
+   *  priority). Local only — does not change Shopify. */
+  setOrderTotal(orderId, total) {
+    const o = this.orders.get(String(orderId));
+    if (!o || o.status !== 'queued') return false;
+    let amt = Number(total);
+    if (!isFinite(amt) || amt < 0) amt = 0;
+    o.total = Math.round(amt * 100) / 100;
+    this._markTopReached();
+    this._persist();
+    this.emit('change', { reason: 'order-total-edit', orderId: String(orderId) });
     return true;
   }
 

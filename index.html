@@ -71,6 +71,11 @@
   .details .dgh{color:var(--muted);font-variant-numeric:tabular-nums;font-size:11px;font-weight:700;margin:7px 0 1px}
   .details .dgh:first-child{margin-top:0}
   .details .dsub{margin:9px 0 2px;font-size:11px;font-weight:800;letter-spacing:.4px;color:var(--done);text-transform:uppercase}
+  /* Per-order edit controls in the expanded Rip-Live view (swap items / total). */
+  .details .dedit{display:flex;gap:7px;margin:7px 0 2px}
+  .details .deditb{background:transparent;border:1px solid var(--line);color:var(--muted);cursor:pointer;
+    font-size:11px;font-weight:700;padding:3px 9px;border-radius:7px;white-space:nowrap;transition:color .12s,border-color .12s}
+  .details .deditb:hover{color:var(--text);border-color:var(--accent)}
   .details .dord{color:var(--muted);font-size:11.5px;margin-top:9px;border-top:1px solid rgba(255,255,255,.06);padding-top:7px}
   /* PST "ordered at" timestamp in the expanded view */
   .details .dts{color:#748099;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
@@ -881,6 +886,41 @@
     try{ await postJSON('/api/manual-order/'+encodeURIComponent(key)+'/items', { items: raw }); }
     catch{ alert("Couldn't save the items — check your connection and try again."); }
   }
+  // ── Edit a REAL order's items / total (expanded Rip-Live view) ──
+  // For swapping what a buyer actually bought. Updates the packing slip + labels,
+  // keeps the order number(s), and does NOT change Shopify.
+  function _findOrderLine(orderId){
+    for(const s of (state.queue||[])){
+      const line = (s.orderLines||[]).find(l=>String(l.id)===String(orderId));
+      if(line) return { slot:s, line };
+      if((s.orderIds||[]).map(String).includes(String(orderId))) return { slot:s, line:null };
+    }
+    return { slot:null, line:null };
+  }
+  async function editOrderItemsUI(orderId){
+    const { slot, line } = _findOrderLine(orderId);
+    const items = line ? line.items : (slot ? slot.items : []);
+    const current = (items||[]).map(i=>(Number(i.qty)>1?(i.qty+'x '):'')+i.name).join(', ');
+    const raw = window.prompt(
+      'Edit the items in this order.\n'
+      + 'One per line or comma-separated; prefix a quantity like "3x Charizard".\n'
+      + 'Rename by editing the text, remove a line to delete it, add a line to add an item.\n'
+      + 'This updates the packing slip & labels and keeps the order number — it does NOT change Shopify.',
+      current);
+    if(raw===null) return;
+    try{ await postJSON('/api/order/'+encodeURIComponent(orderId)+'/items', { items: raw }); }
+    catch{ alert("Couldn't save the items — check your connection and try again."); }
+  }
+  async function editOrderTotalUI(orderId){
+    const { line } = _findOrderLine(orderId);
+    const current = (line && Number(line.total)) ? String(Number(line.total)) : '';
+    const raw = window.prompt('Dollar total for this order (e.g. 85 or 85.50). Leave blank for $0:', current);
+    if(raw===null) return;
+    let amt = Number(String(raw).replace(/[^0-9.]/g,''));
+    if(!isFinite(amt) || amt < 0) amt = 0;
+    try{ await postJSON('/api/order/'+encodeURIComponent(orderId)+'/total', { total: amt }); }
+    catch{ alert("Couldn't save the total — check your connection and try again."); }
+  }
   // Toggle a custom (manual) add's priority flag (shows the PRIORITY badge and
   // sorts it in the priority tier; its pinned position still wins over priority).
   async function toggleManualPriorityUI(key, makePriority){
@@ -1382,7 +1422,16 @@
       const head = multi
         ? `<div class="dgh">#${esc(shortId(l.id))}${ts?` · <span class="dts">${esc(ts)} PST</span>`:''}</div>`
         : (ts?`<div class="dts dts-solo">🕒 Ordered ${esc(ts)} PST</div>`:'');
-      return head + (l.items||[]).map(itemRow).join('');
+      // Edit controls for a REAL order (manual adds use their own row buttons). Lets
+      // the team rename / add / remove line items and change this order's total when
+      // a buyer swaps what they bought — updates the packing slip & labels, keeps the
+      // order number, and never touches Shopify.
+      const editBar = String(l.id).startsWith('manual:') ? '' :
+        `<div class="dedit">`
+        + `<button class="deditb" title="Edit, rename, add or remove the items in this order (updates the packing slip; does not change Shopify)" onclick="editOrderItemsUI('${esc(String(l.id))}')">✎ Edit items</button>`
+        + `<button class="deditb" title="Change the dollar total for this order" onclick="editOrderTotalUI('${esc(String(l.id))}')">$ Edit total</button>`
+        + `</div>`;
+      return head + (l.items||[]).map(itemRow).join('') + editBar;
     };
     const base = lines.filter(l=>!l.addedSinceTop);
     const added = lines.filter(l=>l.addedSinceTop);
