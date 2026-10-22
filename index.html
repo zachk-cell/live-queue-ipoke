@@ -285,8 +285,8 @@
   .sealrow .sealmain{display:flex;align-items:center;gap:12px;padding:10px 14px}
   .sealrow .who{flex:1;min-width:0}
   .sealrow .money{flex:none;color:var(--pri)}
-  .sealrow .sealchk{width:17px;height:17px;accent-color:var(--accent);cursor:pointer;flex:none}
   .sealrow.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .sealrow.selected .selb{background:var(--pri);color:#2a1e00;border-color:var(--pri)}
   .sealrow .items{color:var(--muted);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Inline expand: full item list revealed under a sealed row, each with a "Rip Live" move button */
   .sealcaret{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;
@@ -2051,11 +2051,11 @@
       const detItems=(s.items||[]).map((it,idx)=>`<div class="di"><span class="diq">${it.qty}×</span><span class="din">${esc(it.name)}</span><button class="sealtolive" title="Move this item up to the Rip-Live queue (buyer wants it ripped live)" onclick="sealMoveToLiveUI('${s.id}',${idx})">↑ Rip Live</button></div>`).join('') || '<div class="di" style="color:#748099">No items.</div>';
       return `<div class="sealrow${sealExpanded.has(s.id)?' expanded':''}${sealedSel.has(s.id)?' selected':''}" data-sid="${esc(s.id)}">
         <div class="sealmain">
-          <input type="checkbox" class="sealchk" ${sealedSel.has(s.id)?'checked':''} title="Select this buyer's sealed orders, then Combine to ship them together" onclick="event.stopPropagation()" onchange="toggleSealSelect('${s.id}')">
           <div class="pos">${s.position}</div>
           <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} ${combinedBadge} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
             <div class="items">${esc(itemStr)}</div></div>
           <div class="money" title="Value of the sealed items in this order${s.sealedTotal!=null?'':' (full order total — per-item value not available for this order yet)'}">${money(s.sealedTotal!=null?s.sealedTotal:s.total)}</div>
+          <button class="selb" title="Select to combine — click the ⛓ on this buyer's other sealed orders too, then Combine to ship them together" onclick="toggleSealSelect('${s.id}')">⛓</button>
           <button class="sealcaret" title="Show/hide this order's items (move an item to Rip-Live)" onclick="toggleSealExpand('${s.id}')">▸</button>
           <button class="labelb" title="Print 2.25×1.25 name + order label" onclick="printLabel('sealed','${s.id}')">🏷 Label</button>
           <button class="labelb packb" title="Print 4×6 packing slip — name + order contents" onclick="printPacking('sealed','${s.id}')">📦 Packing</button>
