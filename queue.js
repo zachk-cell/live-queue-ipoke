@@ -2146,13 +2146,13 @@ export class QueueEngine extends EventEmitter {
   }
 
   /** The internal Ship-Sealed queue: a pure pull/pack list sorted ONLY by time
-   *  received — NEWEST on top, oldest on the bottom. Unlike the Rip-Live queue it
+   *  received — OLDEST on top, newest on the bottom. Unlike the Rip-Live queue it
    *  deliberately ignores priority / $-threshold / keywords, so nothing ever jumps
    *  the line here. Queued records only (packed/shipped ones drop off). */
   sealedQueue() {
     const list = [...this.sealedOrders.values()].filter((o) => o.status === 'queued');
-    // Newest received first (descending by order time).
-    list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    // Oldest received first (ascending by order time).
+    list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     return list.map((o, i) => ({
       id: o.id,
       position: i + 1,
