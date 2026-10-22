@@ -499,6 +499,11 @@ app.post('/api/sealed/:id/fulfill', requireAuth, (req, res) => {
 });
 // Remove a sealed order from the queue (cancelled/refunded).
 app.post('/api/sealed/:id/remove', requireAuth, (req, res) => res.json({ ok: queue.removeSealedOrder(req.params.id) }));
+// Combine 2+ same-buyer sealed orders into one slot (ship together) → { ids:[...] }.
+app.post('/api/sealed/combine', requireAuth, (req, res) => {
+  const r = queue.combineSealed((req.body && req.body.ids) || []);
+  res.json({ ok: !!r, id: r && r.id, count: r && r.count });
+});
 // Move one line item out of a sealed order into the Rip-Live queue → { itemIndex }.
 app.post('/api/sealed/:id/move-to-live', requireAuth, (req, res) => {
   res.json({ ok: queue.moveSealedItemToLive(req.params.id, (req.body && req.body.itemIndex)) });

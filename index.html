@@ -285,6 +285,8 @@
   .sealrow .sealmain{display:flex;align-items:center;gap:12px;padding:10px 14px}
   .sealrow .who{flex:1;min-width:0}
   .sealrow .money{flex:none;color:var(--pri)}
+  .sealrow .sealchk{width:17px;height:17px;accent-color:var(--accent);cursor:pointer;flex:none}
+  .sealrow.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
   .sealrow .items{color:var(--muted);font-size:12.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Inline expand: full item list revealed under a sealed row, each with a "Rip Live" move button */
   .sealcaret{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;
@@ -744,6 +746,12 @@
   <button class="ghost" onclick="clearCombineSel()">Cancel</button>
   <button class="primary" onclick="doCombineSelected()">Combine</button>
 </div>
+<!-- iPoke: Ship-Sealed combine selection bar (ship one buyer's orders together) -->
+<div class="combine-bar" id="sealCombineBar">
+  <span><b id="scb-count">0</b> Ship-Sealed selected · combine to pull, pack &amp; ship them together</span>
+  <button class="ghost" onclick="clearSealCombineSel()">Cancel</button>
+  <button class="primary" onclick="doCombineSealed()">Combine</button>
+</div>
 
 <script>
   // Live-feed connection with explicit, never-give-up reconnection.
@@ -1021,8 +1029,7 @@
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
       uname=s.buyer||'Buyer';
-      const ord=s.orderName||(s.id?('#'+shortId(s.id)):'');
-      ords=ord?[ord]:[];
+      ords=(s.orderNames&&s.orderNames.length)?s.orderNames.slice():(s.orderName?[s.orderName]:(s.id?['#'+shortId(s.id)]:[]));
       priorFulfilled=Number(s.priorFulfilled)||0;
       dupe=(state.sealed||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==s.buyerId);
       lastId=String(s.buyerId||s.id||'');
@@ -1959,7 +1966,9 @@
     let name='', orderNo='', items=[], srcShortCode='', oid='';
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
-      name=s.buyer||''; orderNo=s.orderName||('#'+shortId(s.id)); items=s.items||[];
+      name=s.buyer||'';
+      orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
+      items=s.items||[];
       srcShortCode=srcShort(s.source); oid=String(s.id||'');
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
@@ -2029,19 +2038,22 @@
     // Fulfilled Today — Ship Sealed list (with per-row undo). Rendered before the
     // active list's sig early-return below, so it always refreshes.
     renderSealedDone();
-    const sig=JSON.stringify(list.map(s=>[s.id,s.position,s.buyer,s.itemCount,s.isPriority?1:0,(s.orderName||''),(s.items||[]).map(i=>i.qty+i.name).join('|')]));
+    const sig=JSON.stringify(list.map(s=>[s.id,s.position,s.buyer,s.itemCount,s.isPriority?1:0,(s.orderNames||[s.orderName]).join(','),s.combined?1:0,sealedSel.has(s.id)?1:0,(s.items||[]).map(i=>i.qty+i.name).join('|')]));
     if(el._sig===sig) return; el._sig=sig;
-    if(!list.length){ el.innerHTML='<div class="empty" style="padding:8px 2px;color:#748099;font-size:13px">No sealed orders to pull.</div>'; return; }
+    if(!list.length){ el.innerHTML='<div class="empty" style="padding:8px 2px;color:#748099;font-size:13px">No sealed orders to pull.</div>'; updateSealCombineBar(); return; }
     el.innerHTML=list.map(s=>{
       const itemStr=(s.items||[]).map(i=>`${i.qty}× ${i.name}`).join(', ');
       const pri=s.isPriority?'<span class="badge pri">PRIORITY</span>':'';
       const src=s.source?`<span class="srcbadge ${esc(srcShort(s.source))}">${esc(srcShort(s.source))}</span>`:'';
-      const ord=esc(s.orderName||(s.id?('#'+shortId(s.id)):''));
+      const ords=(s.orderNames&&s.orderNames.length)?s.orderNames:[s.orderName||(s.id?('#'+shortId(s.id)):'')];
+      const ord=ords.map(n=>esc(n)).join(' ');
+      const combinedBadge=s.combined?`<span class="badge multi" title="Combined — this buyer's orders are shipping together">⇄ COMBINED ×${ords.length}</span>`:'';
       const detItems=(s.items||[]).map((it,idx)=>`<div class="di"><span class="diq">${it.qty}×</span><span class="din">${esc(it.name)}</span><button class="sealtolive" title="Move this item up to the Rip-Live queue (buyer wants it ripped live)" onclick="sealMoveToLiveUI('${s.id}',${idx})">↑ Rip Live</button></div>`).join('') || '<div class="di" style="color:#748099">No items.</div>';
-      return `<div class="sealrow${sealExpanded.has(s.id)?' expanded':''}" data-sid="${esc(s.id)}">
+      return `<div class="sealrow${sealExpanded.has(s.id)?' expanded':''}${sealedSel.has(s.id)?' selected':''}" data-sid="${esc(s.id)}">
         <div class="sealmain">
+          <input type="checkbox" class="sealchk" ${sealedSel.has(s.id)?'checked':''} title="Select this buyer's sealed orders, then Combine to ship them together" onclick="event.stopPropagation()" onchange="toggleSealSelect('${s.id}')">
           <div class="pos">${s.position}</div>
-          <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
+          <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} ${combinedBadge} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
             <div class="items">${esc(itemStr)}</div></div>
           <div class="money" title="Value of the sealed items in this order${s.sealedTotal!=null?'':' (full order total — per-item value not available for this order yet)'}">${money(s.sealedTotal!=null?s.sealedTotal:s.total)}</div>
           <button class="sealcaret" title="Show/hide this order's items (move an item to Rip-Live)" onclick="toggleSealExpand('${s.id}')">▸</button>
@@ -2054,6 +2066,34 @@
       </div>`;
     }).join('');
     tickTimers(); // fill the in-queue timers immediately on (re)render
+    updateSealCombineBar();
+  }
+  // ── Ship-Sealed combine (ship one buyer's multiple orders together) ──
+  const sealedSel = new Set();
+  function toggleSealSelect(id){
+    if(sealedSel.has(id)) sealedSel.delete(id); else sealedSel.add(id);
+    const node = document.querySelector('.sealrow[data-sid="'+CSS.escape(id)+'"]');
+    if(node) node.classList.toggle('selected', sealedSel.has(id));
+    updateSealCombineBar();
+  }
+  function clearSealCombineSel(){ sealedSel.clear(); if(document.getElementById('sealed')) document.getElementById('sealed')._sig=''; renderSealed(); }
+  function updateSealCombineBar(){
+    const bar=document.getElementById('sealCombineBar'); if(!bar) return;
+    // Only keep selections that still exist in the queue.
+    const live=new Set((state.sealed||[]).map(s=>String(s.id)));
+    for(const id of [...sealedSel]) if(!live.has(String(id))) sealedSel.delete(id);
+    const c=document.getElementById('scb-count'); if(c) c.textContent=sealedSel.size;
+    bar.classList.toggle('show', sealedSel.size>=2);
+  }
+  async function doCombineSealed(){
+    const ids=[...sealedSel];
+    if(ids.length<2) return;
+    try{
+      const r=await postJSON('/api/sealed/combine',{ids});
+      const j=await r.json().catch(()=>({}));
+      if(!j.ok){ alert("Couldn't combine these — they must be unfulfilled Ship-Sealed orders from the SAME buyer."); return; }
+    }catch{ alert("Couldn't combine — check your connection and try again."); return; }
+    clearSealCombineSel();
   }
   // Fulfilled Today — Ship Sealed: today's packed/shipped orders with one-click undo
   // (un-ship → back into the Ship-Sealed queue). Resets daily with the Pacific rollover.

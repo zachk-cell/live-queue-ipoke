@@ -2165,6 +2165,10 @@ export class QueueEngine extends EventEmitter {
       sealedTotal: (o.sealedTotal != null ? Number(o.sealedTotal) : null),
       source: o.source || '',
       orderName: o.orderName || '',
+      // All order numbers on this slot — more than one when sealed orders were
+      // combined (same buyer, packed/shipped together). Falls back to the single one.
+      orderNames: (Array.isArray(o.orderNames) && o.orderNames.length) ? o.orderNames : [o.orderName].filter(Boolean),
+      combined: !!o.combined,
       createdAt: o.createdAt || null,
       // Ship-Sealed never uses priority — it's a straight time-ordered list.
       isPriority: false,
@@ -2178,6 +2182,63 @@ export class QueueEngine extends EventEmitter {
         (x) => x.buyerId === o.buyerId && x.status === 'fulfilled',
       ).length,
     }));
+  }
+
+  /** Combine two or more Ship-Sealed orders from the SAME buyer into one slot, so
+   *  they're pulled, packed and shipped together — the Ship-Sealed analog of the
+   *  Rip-Live manual combine. The oldest order is kept as the target (holds its
+   *  place in the oldest-first list); the others' items and totals are merged into
+   *  it, ALL order numbers are preserved, and the merged-away records are removed.
+   *  Name-based (same display name, case/space-insensitive), like Rip-Live. */
+  combineSealed(ids) {
+    const want = [...new Set((ids || []).map(String))];
+    const recs = want.map((id) => this.sealedOrders.get(id)).filter((o) => o && o.status === 'queued');
+    if (recs.length < 2) return null;
+    // Same buyer name required (tolerant of case/spacing), mirroring Rip-Live.
+    const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const names = new Set(recs.map((o) => norm(this._displayName(o.buyerId, o.buyer))));
+    if (names.size !== 1) return null;
+    // Target = oldest, so the combined slot keeps its place in the time-ordered list.
+    recs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const target = recs[0];
+    const others = recs.slice(1);
+    // Preserve every order number (flatten any already-combined members).
+    const allNames = [];
+    for (const o of recs) {
+      const ns = (Array.isArray(o.orderNames) && o.orderNames.length) ? o.orderNames : [o.orderName].filter(Boolean);
+      for (const n of ns) if (n && !allNames.includes(n)) allNames.push(n);
+    }
+    // Merge items, summing same-name lines (and their per-line value where present).
+    const m = new Map();
+    for (const o of recs) {
+      for (const it of (o.items || [])) {
+        const key = String(it.name || '');
+        const prev = m.get(key);
+        if (prev) {
+          prev.qty += Number(it.qty) || 1;
+          if (it.lineTotal != null) { prev.lineTotal = (prev.lineTotal || 0) + (Number(it.lineTotal) || 0); prev._lt = true; }
+        } else {
+          m.set(key, { name: it.name, qty: Number(it.qty) || 1, sku: it.sku, variant: it.variant,
+            lineTotal: Number(it.lineTotal) || 0, _lt: it.lineTotal != null });
+        }
+      }
+    }
+    const items = [...m.values()].map((x) => {
+      const o = { name: x.name, qty: x.qty };
+      if (x.sku) o.sku = x.sku;
+      if (x.variant) o.variant = x.variant;
+      if (x._lt) o.lineTotal = Math.round(x.lineTotal * 100) / 100;
+      return o;
+    });
+    target.items = items;
+    target.total = Math.round(recs.reduce((s, o) => s + (Number(o.total) || 0), 0) * 100) / 100;
+    target.sealedTotal = this._sealedItemsValue(items);
+    target.orderNames = allNames;
+    target.combined = allNames.length > 1;
+    for (const o of others) this.sealedOrders.delete(o.id);
+    this._persist();
+    this.emit('change', { reason: 'sealed-combine', id: target.id, count: recs.length });
+    return { id: target.id, count: recs.length };
   }
 
   /** How many Ship-Sealed orders were packed/shipped TODAY (Pacific day). Scoped
