@@ -609,6 +609,13 @@ app.get('/api/vault-ledger', requireAuth, (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Durable ingest-ledger health: confirms the "an order can never re-enter the
+// queue via a sync" redundancy is active and populated (admin only).
+app.get('/api/ingest-ledger', requireAuth, (_req, res) => {
+  try { res.json(queue.ingestLedgerReport()); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Inject a synthetic order for testing label printing / the panel. Admin only.
 // Optional query: ?buyer=name&n=1&item=Test%20Pack&total=9.99&buyerId=custom
 // buyerId lets you simulate two DIFFERENT buyers who share a display name.

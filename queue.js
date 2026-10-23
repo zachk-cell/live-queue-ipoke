@@ -37,6 +37,11 @@ const HOUSE_SEAT_SORT_FIRST = GIVEAWAY_SORT_TS - 2;
 const HOUSE_SEAT_SORT_SECOND = GIVEAWAY_SORT_TS - 1;
 const HOUSE_SEAT_NAMES = ['Nikki', 'Greg'];
 const MAX_HISTORY = 30; // keep the last N archived days (Past Days) / streams
+// Durable ingest ledger: remember every order id ever ingested so a Shopify
+// re-sync can NEVER pull the same order into the queue twice. The boot lookback
+// only re-fetches a few hours, so 45 days is a huge safety margin while keeping
+// the on-disk set bounded. (See this.ingestedIds + _pruneIngestedLedger.)
+const INGEST_LEDGER_RETAIN_MS = 45 * 24 * 60 * 60 * 1000; // 45 days
 
 // Order-combining modes (how a buyer's repeat orders are grouped into one slot):
 //   'always'   — legacy PBCC/Poke Pig behaviour: every repeat order from an
@@ -127,6 +132,13 @@ export class QueueEngine extends EventEmitter {
     // Durable dedup for orders that produced ONLY event entries (and so never
     // land in the main `orders` map). Prevents double-ingest across restarts.
     this.seenEventOrders = new Set();
+    // Durable ingest ledger: id -> firstIngestedAt (ms). EVERY order id that has
+    // ever been ingested is recorded here and the dedup guard in upsertOrder
+    // checks it, so an order can never re-enter the queue via a Shopify sync —
+    // even after the daily rollover purges it from `orders` and a restart
+    // re-fetches the recent-orders window. Survives rollover + restart (persisted
+    // in config.json, backfilled on boot), age-pruned, cleared only on reset().
+    this.ingestedIds = new Map();
     // Durable "already fulfilled" event-name registry. Once an event is ripped
     // (fulfilled) or archived, its canonical title is recorded here so the
     // Shopify auto-sync never re-creates it from a product that is still listed
@@ -171,6 +183,9 @@ export class QueueEngine extends EventEmitter {
     // Seed the durable vault audit ledger from orders already in memory, so it's
     // populated on first deploy and after every restart (not just new orders).
     try { this._backfillVaultLedger(); } catch (e) { console.warn('[queue] vault ledger backfill failed:', e.message); }
+    // Seed the durable ingest ledger from all known/recent orders so the
+    // "never re-enter the queue via a sync" guard is retroactive on first deploy.
+    try { this._backfillIngestedLedger(); this._persist(); } catch (e) { console.warn('[queue] ingest ledger backfill failed:', e.message); }
   }
 
   /** Resolve the display name for a buyer, honouring a manual override. */
@@ -223,6 +238,18 @@ export class QueueEngine extends EventEmitter {
           this.overlays.queue.opacity = Math.max(0, Math.min(1, cfg.overlayOpacity)); // migrate old single value
         }
         if (cfg.lastRolloverDay) this.lastRolloverDay = cfg.lastRolloverDay;
+        // Durable ingest ledger (id -> firstIngestedAt). Stored as [id, ts] pairs.
+        // Prune anything older than the retention window as we restore, so the
+        // set stays bounded across the life of the deployment.
+        if (Array.isArray(cfg.ingestedIds)) {
+          const cutoff = Date.now() - INGEST_LEDGER_RETAIN_MS;
+          for (const pair of cfg.ingestedIds) {
+            if (!Array.isArray(pair)) continue;
+            const id = String(pair[0]);
+            const ts = Number(pair[1]) || 0;
+            if (id && ts >= cutoff) this.ingestedIds.set(id, ts);
+          }
+        }
       }
     } catch (e) {
       console.warn('[queue] could not load config:', e.message);
@@ -611,6 +638,27 @@ export class QueueEngine extends EventEmitter {
     };
   }
 
+  /** Read-only health report for the durable ingest ledger — the redundancy that
+   *  guarantees an order id can never re-enter the queue via a Shopify sync.
+   *  Confirms the ledger is populated and surfaces the retention window. */
+  ingestLedgerReport() {
+    let oldest = null, newest = null;
+    for (const ts of this.ingestedIds.values()) {
+      const t = Number(ts) || 0;
+      if (oldest === null || t < oldest) oldest = t;
+      if (newest === null || t > newest) newest = t;
+    }
+    return {
+      enabled: true,
+      trackedOrderIds: this.ingestedIds.size,
+      retentionDays: Math.round(INGEST_LEDGER_RETAIN_MS / 86400000),
+      oldestAt: oldest,
+      newestAt: newest,
+      oldestIso: oldest ? new Date(oldest).toISOString() : null,
+      newestIso: newest ? new Date(newest).toISOString() : null,
+    };
+  }
+
   /** Lean reconciliation summary for the live snapshot (no per-order entries):
    *  per-vault counted vs expected and the number of potential-miss orders. */
   _vaultAuditSummary() {
@@ -710,6 +758,8 @@ export class QueueEngine extends EventEmitter {
           houseSeatToggle: this.houseSeatToggle,
           overlays: this.overlays,
           lastRolloverDay: this.lastRolloverDay,
+          // Durable ingest ledger as [id, firstIngestedAt] pairs.
+          ingestedIds: [...this.ingestedIds.entries()],
         })
       );
       // Only write the events-state file when there are (or were) events, so
@@ -921,7 +971,7 @@ export class QueueEngine extends EventEmitter {
    *    merge only within the window measured from the slot's first order). */
   upsertOrder(raw) {
     const id = String(raw.id);
-    if (this.orders.has(id) || this.seenEventOrders.has(id)) {
+    if (this.orders.has(id) || this.seenEventOrders.has(id) || this.ingestedIds.has(id)) {
       // Already known — don't re-ingest, but DO refresh the display-only fields
       // (buyer label + Shopify order name) from the latest fetch, so a change to
       // the name format or a late-populated order name reaches orders already on
@@ -952,6 +1002,12 @@ export class QueueEngine extends EventEmitter {
 
     // Off-air gate. Perpetual queues (iPoke) ingest 24/7 regardless of live.
     if (!this.live && !this.perpetual) return null;
+
+    // Record this id in the durable ingest ledger the moment we commit to
+    // ingesting it. From here on the dedup guard above will reject any re-sync
+    // of the same order — even after a rollover purge and a restart re-fetch —
+    // so an order number can never hit the queue more than once.
+    if (!this.ingestedIds.has(id)) this.ingestedIds.set(id, Date.now());
 
     const buyerId = String(raw.buyerId);
     const allItems = raw.items || [];
@@ -1971,8 +2027,53 @@ export class QueueEngine extends EventEmitter {
   reset() {
     this.orders.clear();
     this.openBatch.clear();
+    // A full reset is the one explicit "start clean" action, so the durable
+    // ingest ledger clears here too (and ONLY here). Everything else — rollover,
+    // restart, go/end live — preserves it.
+    this.ingestedIds.clear();
     this._persist();
     this.emit('change', { reason: 'reset' });
+  }
+
+  /** Drop ingest-ledger entries older than the retention window so the durable
+   *  set stays bounded. Safe to call any time; only removes ids far older than
+   *  the Shopify re-sync lookback, which can never be re-fetched anyway. */
+  _pruneIngestedLedger() {
+    try {
+      const cutoff = Date.now() - INGEST_LEDGER_RETAIN_MS;
+      let removed = 0;
+      for (const [id, ts] of this.ingestedIds) {
+        if (!(Number(ts) >= cutoff)) { this.ingestedIds.delete(id); removed++; }
+      }
+      if (removed) console.log(`[queue] pruned ${removed} stale ingest-ledger id(s)`);
+    } catch (e) { console.warn('[queue] ingest-ledger prune failed:', e.message); }
+  }
+
+  /** Seed the durable ingest ledger from everything already known on boot — the
+   *  live board, the Ship-Sealed side-queue, event entries, and recent archived
+   *  history — so orders ingested BEFORE this ledger existed are protected from
+   *  the very first deploy (otherwise the next rollover + restart could re-pull
+   *  a just-fulfilled order that isn't in the ledger yet). Idempotent; keeps the
+   *  earliest timestamp seen for each id. */
+  _backfillIngestedLedger() {
+    try {
+      const add = (id, ts) => {
+        if (id == null) return;
+        const sid = String(id);
+        const t = Number(ts) || Date.now();
+        const prev = this.ingestedIds.get(sid);
+        if (prev == null || t < prev) this.ingestedIds.set(sid, t);
+      };
+      for (const o of this.orders.values()) add(o.id, o.createdAt || o.receivedAt || o.fulfilledAt);
+      for (const o of this.sealedOrders.values()) add(o.id, o.createdAt || o.receivedAt);
+      for (const e of this.eventEntries.values()) if (e.orderId) add(e.orderId, e.createdAt);
+      for (const day of this.history) {
+        for (const r of [...(day.fulfilled || []), ...(day.cancelled || []), ...(day.unfulfilled || [])]) {
+          add(r.orderId, r.fulfilledAt || day.endedAt);
+        }
+      }
+      this._pruneIngestedLedger();
+    } catch (e) { console.warn('[queue] ingest-ledger backfill failed:', e.message); }
   }
 
   /** Remove a whole slot from the queue WITHOUT fulfilling it (e.g. the buyer
@@ -2619,9 +2720,14 @@ export class QueueEngine extends EventEmitter {
       this._persistHistory();
     }
     // Remove the archived (fulfilled + cancelled) orders; keep queued ones.
+    // NOTE: these ids stay in this.ingestedIds (the durable ledger), so a restart
+    // re-fetching the recent-orders window cannot pull them back into the queue.
     for (const [id, o] of this.orders) {
       if (o.status === 'fulfilled' || o.status === 'cancelled') this.orders.delete(id);
     }
+    // Opportunistically bound the ledger once a day (keeps it from growing
+    // without limit while preserving the full retention window).
+    this._pruneIngestedLedger();
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'day-rollover', label });
