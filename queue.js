@@ -3259,12 +3259,18 @@ export class QueueEngine extends EventEmitter {
     return !!ev && /\(\s*omega\s*\)/i.test(String(ev.title || ''));
   }
 
+  /** Which events carry the Nikki/Greg house seats + the 🎁 giveaway seat at the
+   *  end: (Omega) quacks AND every WTA. */
+  _eventHasHouseSeats(ev) {
+    return this._isOmegaEvent(ev) || (!!ev && String(ev.type || '').toLowerCase() === 'wta');
+  }
+
   /** (#6) Ensure an (Omega) quack has exactly one auto giveaway seat, always
    *  pinned LAST (via a far-future sort timestamp). Filled with a GIVEAWAY
    *  placeholder you can rename to the winner. Idempotent — never adds a second.
    *  Returns true if it added one. */
   _ensureGiveawaySeat(ev) {
-    if (!this._isOmegaEvent(ev)) return false;
+    if (!this._eventHasHouseSeats(ev)) return false;
     for (const e of this.eventEntries.values()) {
       if (e.eventId === ev.id && e.giveaway && e.status !== 'cancelled') return false;
     }
@@ -3297,7 +3303,7 @@ export class QueueEngine extends EventEmitter {
    *  only adds the pair when the event has NO live house seat yet, so removing one
    *  by hand won't make it reappear. Returns true if it added them. */
   _ensureHouseSeats(ev) {
-    if (!this._isOmegaEvent(ev)) return false;
+    if (!this._eventHasHouseSeats(ev)) return false;
     for (const e of this.eventEntries.values()) {
       if (e.eventId === ev.id && e.houseSeat && e.status !== 'cancelled') return false;
     }
