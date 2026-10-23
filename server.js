@@ -431,6 +431,11 @@ app.post('/api/events/:id', requireAuth, (req, res) => {
   res.json({ ok: !!ev, event: ev });
 });
 app.delete('/api/events/:id', requireAuth, (req, res) => res.json({ ok: queue.removeEvent(req.params.id) }));
+// Recompute spots from pack counts (WTA: 1 pack = 1 spot). One-time fix for entries
+// added before this rule; new entries already compute correctly.
+app.post('/api/events/:id/recompute-spots', requireAuth, (req, res) => {
+  res.json({ ok: true, changed: queue.recomputeEventSpots(req.params.id) });
+});
 app.post('/api/events/:id/active', requireAuth, (req, res) => {
   // Body { active: true|false } — toggle this event onto/off the overlay+Discord.
   const on = !(req.body && req.body.active === false);

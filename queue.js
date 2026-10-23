@@ -2713,6 +2713,19 @@ export class QueueEngine extends EventEmitter {
 
   /** Record one event spot entry (its own line, qty = spot count). Idempotent
    *  on (event, order, line index). */
+  /** How many spots a line item is worth. WTA ONLY: 1 pack = 1 spot, so a "Lot of
+   *  N" counts as N spots per unit and a Single (or anything without a lot size) as
+   *  1, times the line quantity. For any non-WTA event (quacks) it's just the line
+   *  quantity — unchanged — so quack seats are never affected. */
+  _packSpots(item, ev) {
+    const qty = Math.max(1, Number(item && item.qty) || 1);
+    const isWta = ev && String(ev.type || '').toLowerCase() === 'wta';
+    if (!isWta) return qty;
+    const m = String((item && item.name) || '').match(/lot of\s*(\d+)/i);
+    const perUnit = m ? Math.max(1, parseInt(m[1], 10) || 1) : 1;
+    return perUnit * qty;
+  }
+
   _addEventEntry(ev, item, raw, idx) {
     const entryId = `evt:${ev.id}:${String(raw.id)}:${idx}`;
     if (this.eventEntries.has(entryId)) return this.eventEntries.get(entryId);
@@ -2724,7 +2737,9 @@ export class QueueEngine extends EventEmitter {
       buyerId: String(raw.buyerId),
       buyer: raw.buyer || 'Buyer',
       itemName: item.name || '',
-      spots: Math.max(1, Number(item.qty) || 1),
+      // Original line quantity kept so spots can be recomputed deterministically.
+      qty: Math.max(1, Number(item.qty) || 1),
+      spots: this._packSpots(item, ev),
       total: Number(raw.total || 0),
       source: raw.source || '',
       createdAt: raw.createdAt || Date.now(),
@@ -2733,6 +2748,29 @@ export class QueueEngine extends EventEmitter {
     };
     this.eventEntries.set(entryId, entry);
     return entry;
+  }
+
+  /** Recompute spots for an event's entries from the pack count in each item name
+   *  (WTA only: "Lot of 5" → 5, "Lot of 10" → 10, Single → 1), times the original
+   *  line quantity. Idempotent — it stores the base line qty once and always derives
+   *  spots from that, so re-running never double-counts. Skips manually-adjusted
+   *  entries and special (giveaway/house) seats; a non-WTA event resets to qty. */
+  recomputeEventSpots(eventId) {
+    const ev = this.events.find((e) => e.id === eventId);
+    if (!ev) return 0;
+    let changed = 0;
+    for (const e of this.eventEntries.values()) {
+      if (e.eventId !== eventId || e.status === 'cancelled') continue;
+      if (e.spotsAdjusted || e.giveaway || e.houseSeat) continue;
+      // Base line quantity: stored on new entries; for legacy entries the old
+      // spots value WAS the line quantity, so fall back to it (then persist it).
+      const baseQty = Math.max(1, Number(e.qty != null ? e.qty : e.spots) || 1);
+      if (e.qty == null) e.qty = baseQty;
+      const newSpots = this._packSpots({ name: e.itemName, qty: baseQty }, ev);
+      if (newSpots !== e.spots) { e.spots = newSpots; changed++; }
+    }
+    if (changed) { this._persist(); this.emit('change', { reason: 'event-spots-recompute', eventId, changed }); }
+    return changed;
   }
 
   /** Record an event's name as "fulfilled / done" so the Shopify auto-sync will
