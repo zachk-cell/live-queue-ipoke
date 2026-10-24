@@ -1016,6 +1016,22 @@ export class QueueEngine extends EventEmitter {
     const buyerId = String(raw.buyerId);
     const allItems = raw.items || [];
 
+    // ── $0 Penny Sleeves giveaway relabel ── the moment a $0 order carrying the
+    // Penny Sleeves Pro Support accessory enters the queue, relabel that line to
+    // "TikTok Giveaway" and tag it so it routes to Rip-Live (not Ship-Sealed).
+    // Done here at the engine chokepoint — not only in shopify.js — so it fires
+    // for every ingest path regardless of how the order was flagged upstream.
+    // Buyer name is intentionally left intact (needed to ship the giveaway); a
+    // paid purchase of the same sleeves (total != 0) is never changed.
+    if (Number(raw.total) === 0) {
+      for (const it of allItems) {
+        if (this._isPennySleevesGiveawayName(it.name) && it.name !== 'TikTok Giveaway') {
+          it.giveaway = true;
+          it.name = 'TikTok Giveaway';
+        }
+      }
+    }
+
     // ── Event routing ── pull event-spot line items into their event side-queue.
     // Each matching line item becomes its own event entry (qty = spot count).
     const nonEvent = [];
@@ -2209,14 +2225,14 @@ export class QueueEngine extends EventEmitter {
     return n.includes('penny sleeves') && n.includes('pro support');
   }
 
-  /** Retroactively relabel $0 Penny Sleeves giveaway orders ALREADY in the queue
-   *  (ingested before shopify.js tagged them, or manually moved out of Ship-Sealed)
-   *  so they look exactly like a freshly-ingested giveaway: item name + buyer both
-   *  "TikTok Giveaway", and the giveaway tag set so the Ship-Sealed sweep leaves
-   *  them in Rip-Live. Only touches queued $0 orders that contain the Penny Sleeves
-   *  Pro Support accessory — a paid purchase of the same sleeves is never changed.
-   *  Idempotent (skips anything already labeled). MUST run before
-   *  sweepQueuedIntoSealed so the tag is in place before that sweep looks. */
+  /** Retroactively relabel $0 Penny Sleeves giveaway items ALREADY in the queue
+   *  (ingested before the engine relabel existed) so they read "TikTok Giveaway"
+   *  like a freshly-ingested one, with the giveaway tag set so the Ship-Sealed
+   *  sweep leaves them in Rip-Live. Item-only: the buyer name is left intact
+   *  (needed to ship the giveaway), matching the upsertOrder ingest path. Only
+   *  touches queued $0 orders carrying the Penny Sleeves Pro Support accessory —
+   *  a paid purchase of the same sleeves is never changed. Idempotent. MUST run
+   *  before sweepQueuedIntoSealed so the tag is in place before that sweep looks. */
   _relabelQueuedGiveaways() {
     let changed = 0;
     for (const o of this.orders.values()) {
@@ -2232,7 +2248,6 @@ export class QueueEngine extends EventEmitter {
         }
       }
       if (hit) {
-        if (o.buyer !== 'TikTok Giveaway') o.buyer = 'TikTok Giveaway';
         o.hasPriority = this._isPriorityOrder(o.items || []);
         changed++;
       }
