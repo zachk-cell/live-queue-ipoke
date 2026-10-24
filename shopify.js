@@ -241,15 +241,21 @@ export function normalizeShopifyOrder(o) {
     : (cust && cust.email ? 'shop:' + String(cust.email).toLowerCase() : orderId);
   const total = money(o.currentTotalPriceSet || o.totalPriceSet);
   // TikTok giveaway: a $0 order that contains the Penny Sleeves Pro Support
-  // accessory. Rename the buyer to "TikTok Giveaway" and tag the matching line
-  // item(s) so the queue engine routes them to the rip-live active queue instead
-  // of Ship-Sealed (see _isSealedItem in queue.js). Only at $0 — a real paid
-  // purchase of the same sleeves keeps its normal name and sealed routing.
+  // accessory. Rename the buyer to "TikTok Giveaway", relabel the matching line
+  // item(s) to "TikTok Giveaway" (so the queue/overlay show a clean giveaway
+  // label instead of the long sleeves title), and tag them so the queue engine
+  // routes them to the rip-live active queue instead of Ship-Sealed (see
+  // _isSealedItem in queue.js). Only at $0 — a real paid purchase of the same
+  // sleeves keeps its normal name and sealed routing. Detection runs on the
+  // ORIGINAL title (before the rename below), so the tag/label are applied first.
   const isGiveaway = Number(total) === 0
     && items.some((it) => isPennySleevesGiveawayItem(it.name));
   if (isGiveaway) {
     for (const it of items) {
-      if (isPennySleevesGiveawayItem(it.name)) it.giveaway = true;
+      if (isPennySleevesGiveawayItem(it.name)) {
+        it.giveaway = true;
+        it.name = 'TikTok Giveaway';
+      }
     }
   }
   return {
