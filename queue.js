@@ -179,6 +179,10 @@ export class QueueEngine extends EventEmitter {
     this._backfillGiveawaySeats();
     // (#8) Pull Ship-Sealed items out of orders that were queued before the
     // Ship-Sealed split existed, so they land in the Ship-Sealed queue retroactively.
+    // Relabel any $0 Penny Sleeves giveaway already sitting in the queue BEFORE the
+    // sealed sweep runs, so the giveaway tag keeps them in Rip-Live (and existing
+    // ones match freshly-ingested giveaways: item + buyer = "TikTok Giveaway").
+    try { this._relabelQueuedGiveaways(); } catch (e) { console.warn('[queue] giveaway relabel failed:', e.message); }
     try { this.sweepQueuedIntoSealed(); } catch (e) { console.warn('[queue] sealed sweep failed:', e.message); }
     // Seed the durable vault audit ledger from orders already in memory, so it's
     // populated on first deploy and after every restart (not just new orders).
@@ -2196,6 +2200,45 @@ export class QueueEngine extends EventEmitter {
     }
     if (changed) { this._markTopReached(); this._persist(); this.emit('change', { reason: 'sealed-sweep', moved }); }
     return moved;
+  }
+
+  /** The TikTok "giveaway" product match — mirror of isPennySleevesGiveawayItem in
+   *  shopify.js, used engine-side for the retroactive relabel sweep. */
+  _isPennySleevesGiveawayName(name) {
+    const n = String(name == null ? '' : name).toLowerCase();
+    return n.includes('penny sleeves') && n.includes('pro support');
+  }
+
+  /** Retroactively relabel $0 Penny Sleeves giveaway orders ALREADY in the queue
+   *  (ingested before shopify.js tagged them, or manually moved out of Ship-Sealed)
+   *  so they look exactly like a freshly-ingested giveaway: item name + buyer both
+   *  "TikTok Giveaway", and the giveaway tag set so the Ship-Sealed sweep leaves
+   *  them in Rip-Live. Only touches queued $0 orders that contain the Penny Sleeves
+   *  Pro Support accessory — a paid purchase of the same sleeves is never changed.
+   *  Idempotent (skips anything already labeled). MUST run before
+   *  sweepQueuedIntoSealed so the tag is in place before that sweep looks. */
+  _relabelQueuedGiveaways() {
+    let changed = 0;
+    for (const o of this.orders.values()) {
+      if (o.status !== 'queued') continue;
+      if (Number(o.total) !== 0) continue; // giveaways come through at $0
+      let hit = false;
+      for (const it of (o.items || [])) {
+        const isPenny = this._isPennySleevesGiveawayName(it.name);
+        if ((isPenny || it.giveaway) && it.name !== 'TikTok Giveaway') {
+          it.giveaway = true;
+          it.name = 'TikTok Giveaway';
+          hit = true;
+        }
+      }
+      if (hit) {
+        if (o.buyer !== 'TikTok Giveaway') o.buyer = 'TikTok Giveaway';
+        o.hasPriority = this._isPriorityOrder(o.items || []);
+        changed++;
+      }
+    }
+    if (changed) { this._persist(); this.emit('change', { reason: 'giveaway-relabel', changed }); }
+    return changed;
   }
 
   /** Add (or refresh) an order's Ship-Sealed slot. One record per order id — no
