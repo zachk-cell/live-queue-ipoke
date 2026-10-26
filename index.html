@@ -473,6 +473,8 @@
   .eqrow .eqadj{color:#ffbe6b;font-size:10px;font-weight:800;flex:none;letter-spacing:.3px;background:#3a2a0c;border:1px solid #7a5a16;border-radius:20px;padding:1px 7px;cursor:help}
   .eqrow .eqspedit{background:transparent;border:1px solid transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px}
   .eqrow .eqspedit:hover{color:var(--pri);border-color:#3a3f4b}
+  .eqrow .eqlabel{background:transparent;border:1px solid transparent;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:6px;flex:none}
+  .eqrow .eqlabel:hover{color:var(--text);border-color:#3a3f4b}
   .eqrow .eqgift{color:#ffc879;font-size:10px;font-weight:800;flex:none;letter-spacing:.3px;background:#3a2a0c;border:1px solid #6a5010;border-radius:20px;padding:1px 7px}
   .eqadd{margin-top:6px;background:#161a22;border:1px dashed #3a3f4b;color:#a7b0c2;cursor:pointer;font-size:12px;font-weight:700;padding:6px 10px;border-radius:8px;width:100%}
   .eqadd:hover{color:var(--text);border-color:#4a92ff}
@@ -742,15 +744,19 @@
 
 <!-- iPoke: manual-combine selection bar -->
 <div class="combine-bar" id="combineBar">
-  <span><b id="cb-count">0</b> selected · drag any one to move them together, or Combine same-name orders</span>
+  <span><b id="cb-count">0</b> selected</span>
+  <button class="ghost" onclick="printLabelsBatch('queue')">🏷 Print Labels</button>
+  <button class="ghost" onclick="printPackingBatch('queue')">📦 Print Packing</button>
+  <button class="primary" id="cb-combine" onclick="doCombineSelected()">Combine</button>
   <button class="ghost" onclick="clearCombineSel()">Cancel</button>
-  <button class="primary" onclick="doCombineSelected()">Combine</button>
 </div>
 <!-- iPoke: Ship-Sealed combine selection bar (ship one buyer's orders together) -->
 <div class="combine-bar" id="sealCombineBar">
-  <span><b id="scb-count">0</b> Ship-Sealed selected · combine to pull, pack &amp; ship them together</span>
+  <span><b id="scb-count">0</b> Ship-Sealed selected</span>
+  <button class="ghost" onclick="printLabelsBatch('sealed')">🏷 Print Labels</button>
+  <button class="ghost" onclick="printPackingBatch('sealed')">📦 Print Packing</button>
+  <button class="primary" id="scb-combine" onclick="doCombineSealed()">Combine</button>
   <button class="ghost" onclick="clearSealCombineSel()">Cancel</button>
-  <button class="primary" onclick="doCombineSealed()">Combine</button>
 </div>
 
 <script>
@@ -1029,6 +1035,7 @@
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
       uname=s.buyer||'Buyer';
+      if(isGiveawayItems(s.items)) uname='TikTok Giveaway';
       ords=(s.orderNames&&s.orderNames.length)?s.orderNames.slice():(s.orderName?[s.orderName]:(s.id?['#'+shortId(s.id)]:[]));
       priorFulfilled=Number(s.priorFulfilled)||0;
       dupe=(state.sealed||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==s.buyerId);
@@ -1039,6 +1046,7 @@
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
       uname=e.buyer||'Buyer';
+      if(isGiveawayItems(e.items)) uname='TikTok Giveaway';
       ords=orderNoList(e);
       countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
       priorFulfilled=Number(e.priorFulfilled)||0;
@@ -1192,6 +1200,56 @@
         for(var i=0;i<lbls.length;i++){
           fit(lbls[i].querySelector('.evt'),15,7);   // event title: shrink then wrap
           fit(lbls[i].querySelector('.nm'),20,11);    // buyer name: shrink then wrap
+        }
+        window.focus(); setTimeout(function(){window.print();},80);
+      })();<\/script>
+    </body></html>`;
+    let f=document.getElementById('labelFrame');
+    if(!f){ f=document.createElement('iframe'); f.id='labelFrame';
+      f.style.cssText='position:fixed;left:-10000px;top:0;width:2.4in;height:1.4in;border:0;background:#fff';
+      document.body.appendChild(f); }
+    f.srcdoc=doc;
+  }
+
+  // Reprint ONE event/WTA spot's label — for a damaged label or an extra copy for a
+  // single person. Same 2.25×1.25 format as the bulk event labels, just this one seat.
+  async function printOneEventLabel(eventId, entryId){
+    const ev=(state.events||[]).find(e=>e.id===eventId); if(!ev) return;
+    const en=(ev.entries||[]).find(x=>String(x.id)===String(entryId)); if(!en) return;
+    const intl=await orderIsInternational(srcShort(en.source), en.orderId);
+    const nm=esc(en.buyer||'');
+    const ord=esc(en.orderName||(en.orderId?('#'+shortId(en.orderId)):''));
+    const sp=Number(en.spots)||1;
+    const pos=en.position!=null?en.position:'';
+    const meta=[ord, `×${sp}`].filter(Boolean).join(' · ');
+    const posTxt=(pos!==''?('Pos '+pos):'');
+    const src=srcShort(en.source);
+    const label=`<div class="lbl"><div class="pos">${posTxt}</div><div class="body"><div class="evt">${esc(ev.title)}</div><div class="nm">${nm}</div><div class="meta">${meta}</div></div>${src?`<div class="src">${esc(src)}</div>`:''}${intl?`<div class="customs"><div class="cl">Q:</div><div class="cl cl2">V:</div></div>`:''}</div>`;
+    const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page{size:2.25in 1.25in;margin:0}
+      html,body{margin:0;padding:0;background:#fff;color:#000}
+      .lbl{width:2.25in;height:1.25in;box-sizing:border-box;padding:0.05in 0.08in;
+        display:flex;flex-direction:column;position:relative;
+        font-family:Arial,Helvetica,sans-serif;overflow:hidden}
+      .lbl .src{position:absolute;right:0.055in;bottom:0.04in;font-size:9px;font-weight:800;
+        letter-spacing:.5px;color:#000;border:1.25px solid #000;border-radius:3px;padding:0 3px;line-height:1.35}
+      .lbl .pos{flex:none;font-size:8.5pt;font-weight:800;font-family:'Courier New',monospace;text-align:left;line-height:1}
+      .lbl .body{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+      .lbl .evt{font-size:11pt;font-weight:700;text-transform:uppercase;letter-spacing:.2px;width:100%;line-height:1.05;margin-bottom:2px}
+      .lbl .nm{font-size:20px;font-weight:800;line-height:1.05;width:100%;word-break:break-word}
+      .lbl .meta{font-size:9.5pt;font-weight:700;margin-top:3px;font-family:'Courier New',monospace}
+      .lbl .customs{position:absolute;left:0.07in;bottom:0.05in;text-align:left;font-weight:800;font-size:10px;color:#000}
+      .lbl .customs .cl2{margin-top:0.16in}
+    </style></head><body>${label}
+      <script>(function(){
+        function fit(el,start,floor){ if(!el) return;
+          el.style.whiteSpace='nowrap'; var s=start; el.style.fontSize=s+'px';
+          while(s>floor && el.scrollWidth>el.clientWidth){ s--; el.style.fontSize=s+'px'; }
+          if(el.scrollWidth>el.clientWidth){ el.style.whiteSpace='normal'; } }
+        var lbls=document.querySelectorAll('.lbl');
+        for(var i=0;i<lbls.length;i++){
+          fit(lbls[i].querySelector('.evt'),15,7);
+          fit(lbls[i].querySelector('.nm'),20,11);
         }
         window.focus(); setTimeout(function(){window.print();},80);
       })();<\/script>
@@ -1966,13 +2024,13 @@
     let name='', orderNo='', items=[], srcShortCode='', oid='';
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
-      name=s.buyer||'';
+      name=s.buyer||''; if(isGiveawayItems(s.items)) name='TikTok Giveaway';
       orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
       items=s.items||[];
       srcShortCode=srcShort(s.source); oid=String(s.id||'');
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
-      name=e.buyer||'';
+      name=e.buyer||''; if(isGiveawayItems(e.items)) name='TikTok Giveaway';
       orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
       items=e.items||[];
       srcShortCode=e.sourceShort||''; oid=String((e.orderIds||[])[0]||'');
@@ -2027,6 +2085,171 @@
     f.srcdoc=doc;
   }
 
+  // ── Batch printing: every SELECTED order in one print dialog ──
+  // scope 'queue' uses the Rip-Live selection (selectedKeys); scope 'sealed' uses
+  // the Ship-Sealed selection (sealedSel). Each selected order becomes one page
+  // (a thermal label, or a 4×6 packing slip) and they all go to a single dialog —
+  // same per-order layout as the single-order buttons, just stacked with page
+  // breaks. Mirrors the bulk event-label printer.
+  function _selectedKeysFor(scope){
+    return scope==='sealed' ? [...sealedSel] : [...selectedKeys];
+  }
+  // A $0 Penny Sleeves giveaway order: every line reads "TikTok Giveaway". When so,
+  // the printed label + packing slip show "TikTok Giveaway" as the name too (matches
+  // the queue), instead of the winner's real name.
+  function isGiveawayItems(items){
+    return !!(items && items.length && items.every(i=>/^tiktok giveaway$/i.test(String((i&&i.name)||''))));
+  }
+  async function printLabelsBatch(scope){
+    const keys=_selectedKeysFor(scope);
+    if(!keys.length){ return; }
+    // Gather each label's data (incl. the async international lookup) in parallel.
+    const datas=(await Promise.all(keys.map(async (key)=>{
+      let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, lastId='',
+          srcTag='', srcShortCode='', hasVault=false, oid='';
+      if(scope==='sealed'){
+        const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return null;
+        uname=s.buyer||'Buyer';
+        ords=(s.orderNames&&s.orderNames.length)?s.orderNames.slice():(s.orderName?[s.orderName]:(s.id?['#'+shortId(s.id)]:[]));
+        priorFulfilled=Number(s.priorFulfilled)||0;
+        dupe=(state.sealed||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==s.buyerId);
+        lastId=String(s.buyerId||s.id||''); srcTag=srcShort(s.source); srcShortCode=srcTag; hasVault=!!s.hasVault; oid=String(s.id||'');
+      } else {
+        const e=(state.queue||[]).find(x=>x.key===key); if(!e) return null;
+        uname=e.buyer||'Buyer'; if(isGiveawayItems(e.items)) uname='TikTok Giveaway'; ords=orderNoList(e);
+        countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
+        priorFulfilled=Number(e.priorFulfilled)||0;
+        dupe=(state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
+        lastId=String(e.buyerId||''); srcTag=e.sourceShort||''; srcShortCode=e.sourceShort||''; hasVault=!!e.hasVault; oid=String((e.orderIds||[])[0]||'');
+      }
+      const intl=await orderIsInternational(srcShortCode, oid);
+      return { uname, ordLine: ords.join('   '), countLine, priorFulfilled, dupe, lastId, srcTag, hasVault, intl };
+    }))).filter(Boolean);
+    if(!datas.length) return;
+    const labels=datas.map(d=>{
+      const flags=[]; if(d.priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
+      const idTag=d.dupe ? ('id …'+d.lastId.slice(-4)) : '';
+      return `<div class="lbl2">`
+        + flags.map(f=>`<div class="flag">${esc(f)}</div>`).join('')
+        + `<div class="uname">${esc(d.uname)}</div>`
+        + (idTag?`<div class="idtag">${esc(idTag)}</div>`:'')
+        + (d.countLine?`<div class="count">${esc(d.countLine)}</div>`:'')
+        + (d.ordLine?`<div class="ord">${esc(d.ordLine)}</div>`:'')
+        + ((d.srcTag||d.hasVault)?`<div class="corner">${d.hasVault?`<span class="vtag">V</span>`:''}${d.srcTag?`<span class="srctag">${esc(d.srcTag)}</span>`:''}</div>`:'')
+        + (d.intl?`<div class="customs"><div class="cl">Q:</div><div class="cl cl2">V:</div></div>`:'')
+        + `</div>`;
+    }).join('');
+    const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page{size:2.25in 1.25in;margin:0}
+      html,body{margin:0;padding:0;background:#fff;color:#000}
+      .lbl2{width:2.25in;height:1.25in;box-sizing:border-box;padding:0.05in 0.08in;
+        display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
+        font-family:Arial,Helvetica,sans-serif;position:relative;overflow:hidden;page-break-after:always}
+      .lbl2:last-child{page-break-after:auto}
+      .flag{border:1.5px solid #000;color:#000;background:#fff;font-weight:800;font-size:8.5px;
+        padding:1px 6px;border-radius:3px;letter-spacing:.4px;margin-bottom:3px;white-space:nowrap}
+      .uname{font-weight:800;line-height:1.03;word-break:break-word;max-width:100%}
+      .idtag{font-size:8px;font-weight:700;color:#000;margin-top:1px}
+      .count{font-size:10px;font-weight:700;margin-top:2px;text-transform:uppercase;letter-spacing:.4px}
+      .ord{margin-top:5px;font-family:'Courier New',monospace;font-weight:700;line-height:1.15;word-break:break-all;max-width:100%}
+      .corner{position:absolute;right:0.055in;bottom:0.04in;display:flex;gap:3px;align-items:center}
+      .srctag,.vtag{font-size:9px;font-weight:800;letter-spacing:.5px;color:#000;border:1.25px solid #000;border-radius:3px;padding:0 3px;line-height:1.35}
+      .customs{position:absolute;left:0.07in;bottom:0.05in;text-align:left;font-weight:800;font-size:10px;color:#000}
+      .customs .cl2{margin-top:0.16in}
+    </style></head><body>${labels}
+      <script>(function(){
+        function shrinkWidth(el,start,min){var s=start;el.style.fontSize=s+'px';
+          while(s>min && el.scrollWidth>el.clientWidth){s--;el.style.fontSize=s+'px';}return s;}
+        var lbls=document.querySelectorAll('.lbl2');
+        for(var i=0;i<lbls.length;i++){
+          var b=lbls[i];var u=b.querySelector('.uname');var o=b.querySelector('.ord');
+          if(u){u.style.whiteSpace='nowrap';var us=shrinkWidth(u,30,13);
+            if(u.scrollWidth>u.clientWidth){u.style.whiteSpace='normal';}}
+          var os=o?shrinkWidth(o,13,7):0;var guard=0;
+          while(b.scrollHeight>b.clientHeight && guard<120){
+            if(o&&os>7){os--;o.style.fontSize=os+'px';}
+            else if(u&&us>9){us--;u.style.fontSize=us+'px';}
+            else break; guard++;
+          }
+        }
+        window.focus();setTimeout(function(){window.print();},90);
+      })();<\/script>
+    </body></html>`;
+    let f=document.getElementById('labelFrame');
+    if(!f){ f=document.createElement('iframe'); f.id='labelFrame';
+      f.style.cssText='position:fixed;left:-10000px;top:0;width:2.4in;height:1.4in;border:0;background:#fff';
+      document.body.appendChild(f); }
+    f.srcdoc=doc;
+  }
+
+  async function printPackingBatch(scope){
+    const keys=_selectedKeysFor(scope);
+    if(!keys.length){ return; }
+    const printedOn=new Date().toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
+    const slips=(await Promise.all(keys.map(async (key)=>{
+      let name='', orderNo='', items=[], srcShortCode='', oid='';
+      if(scope==='sealed'){
+        const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return null;
+        name=s.buyer||''; if(isGiveawayItems(s.items)) name='TikTok Giveaway';
+        orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
+        items=s.items||[]; srcShortCode=srcShort(s.source); oid=String(s.id||'');
+      } else {
+        const e=(state.queue||[]).find(x=>x.key===key); if(!e) return null;
+        name=e.buyer||''; if(isGiveawayItems(e.items)) name='TikTok Giveaway';
+        orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
+        items=e.items||[]; srcShortCode=e.sourceShort||''; oid=String((e.orderIds||[])[0]||'');
+      }
+      const intl=await orderIsInternational(srcShortCode, oid);
+      const totalQty=(items||[]).reduce((n,i)=>n+(Number(i.qty)||1),0);
+      const itemRows=(items&&items.length)
+        ? items.map(i=>`<div class="pk-item"><span class="pk-q">${Number(i.qty)||1}</span><span class="pk-n">${esc(i.name)}</span></div>`).join('')
+        : `<div class="pk-item"><span class="pk-n pk-empty">No physical items on this order.</span></div>`;
+      return `<div class="slip">
+        <div class="pk-brand">iPokeTCG</div>
+        <div class="pk-hdr"><span class="t">PACKING SLIP</span><span class="o">${esc(orderNo)}</span></div>
+        ${intl?`<div class="pk-intl">INTERNATIONAL</div>`:''}
+        <div class="pk-lbl"><span>Order for</span></div>
+        <div class="pk-name">${esc(name)||'—'}</div>
+        <div class="pk-lbl"><span>Order contents</span><span class="pk-count">${totalQty} item${totalQty===1?'':'s'}</span></div>
+        <div class="pk-items">${itemRows}</div>
+        <div class="pk-thanks">Thank you for your order!</div>
+        <div class="pk-foot"><span>${esc(orderNo)}</span><span>Printed ${esc(printedOn)} ET</span></div>
+      </div>`;
+    }))).filter(Boolean);
+    if(!slips.length) return;
+    const doc=`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page{size:4in 6in;margin:0}
+      *{box-sizing:border-box}
+      html,body{margin:0;padding:0;background:#fff;color:#000}
+      .slip{width:4in;height:6in;padding:0.26in 0.3in;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;page-break-after:always;overflow:hidden}
+      .slip:last-child{page-break-after:auto}
+      .pk-brand{font-size:15pt;font-weight:800;letter-spacing:.5px;text-align:center;margin-bottom:5px}
+      .pk-hdr{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #000;padding-bottom:7px;margin-bottom:2px}
+      .pk-hdr .t{font-size:13pt;font-weight:800;letter-spacing:1px}
+      .pk-hdr .o{font-size:12.5pt;font-weight:800;font-family:'Courier New',monospace}
+      .pk-lbl{font-size:8pt;font-weight:800;text-transform:uppercase;letter-spacing:.7px;margin:13px 0 4px;
+        display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #000;padding-bottom:2px}
+      .pk-count{font-size:8.5pt;font-weight:800}
+      .pk-name{font-size:16pt;font-weight:800;line-height:1.12}
+      .pk-items{margin-top:2px;flex:1}
+      .pk-item{display:flex;gap:9px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #000}
+      .pk-item:last-child{border-bottom:none}
+      .pk-q{flex:none;min-width:24px;text-align:center;font-weight:800;font-size:10.5pt;border:1.5px solid #000;border-radius:4px;padding:1px 5px;line-height:1.3}
+      .pk-n{font-size:11.5pt;line-height:1.3;word-break:break-word}
+      .pk-empty{font-style:italic}
+      .pk-thanks{border-top:1px solid #000;margin-top:6px;padding-top:7px;text-align:center;font-size:11pt;font-weight:700}
+      .pk-foot{margin-top:5px;font-size:8pt;display:flex;justify-content:space-between}
+      .pk-intl{border:2.5px solid #000;border-radius:5px;text-align:center;font-weight:800;font-size:14pt;letter-spacing:2px;padding:4px 0;margin:6px 0 2px}
+    </style></head><body>${slips.join('')}
+      <script>window.focus();setTimeout(function(){window.print();},90);<\/script>
+    </body></html>`;
+    let f=document.getElementById('packFrame');
+    if(!f){ f=document.createElement('iframe'); f.id='packFrame';
+      f.style.cssText='position:fixed;left:-10000px;top:0;width:4.2in;height:6.2in;border:0;background:#fff';
+      document.body.appendChild(f); }
+    f.srcdoc=doc;
+  }
+
   // ── Ship-Sealed queue (#8) — internal pull/pack/ship list ──
   function renderSealed(){
     const el=document.getElementById('sealed');
@@ -2051,6 +2274,7 @@
       const detItems=(s.items||[]).map((it,idx)=>`<div class="di"><span class="diq">${it.qty}×</span><span class="din">${esc(it.name)}</span><button class="sealtolive" title="Move this item up to the Rip-Live queue (buyer wants it ripped live)" onclick="sealMoveToLiveUI('${s.id}',${idx})">↑ Rip Live</button></div>`).join('') || '<div class="di" style="color:#748099">No items.</div>';
       return `<div class="sealrow${sealExpanded.has(s.id)?' expanded':''}${sealedSel.has(s.id)?' selected':''}" data-sid="${esc(s.id)}">
         <div class="sealmain">
+          <input type="checkbox" class="selchk" ${sealedSel.has(s.id)?'checked':''} title="Select this order — tick several, then batch-print labels/packing or Combine" onclick="event.stopPropagation()" onchange="toggleSealSelect('${s.id}')">
           <div class="pos">${s.position}</div>
           <div class="who"><div class="name">${esc(s.buyer)} ${src} ${pri} ${combinedBadge} <span class="ordno">${ord}</span><span class="sealmeta" title="Order placed (PST) · time waiting in the Ship-Sealed queue">🕒 ${esc(fmtPST(s.createdAt))} <span class="qtimer sealtimer" data-since="${s.createdAt||''}"></span></span></div>
             <div class="items">${esc(itemStr)}</div></div>
@@ -2083,7 +2307,9 @@
     const live=new Set((state.sealed||[]).map(s=>String(s.id)));
     for(const id of [...sealedSel]) if(!live.has(String(id))) sealedSel.delete(id);
     const c=document.getElementById('scb-count'); if(c) c.textContent=sealedSel.size;
-    bar.classList.toggle('show', sealedSel.size>=2);
+    bar.classList.toggle('show', sealedSel.size>=1);
+    const cbtn=document.getElementById('scb-combine');
+    if(cbtn){ cbtn.disabled = sealedSel.size<2; cbtn.title = sealedSel.size<2 ? 'Select 2+ orders from the same buyer to combine' : 'Combine the selected orders'; }
   }
   async function doCombineSealed(){
     const ids=[...sealedSel];
@@ -2581,6 +2807,7 @@
           ${en.fulfilled&&en.fulfilledAt?`<span class="eqtime" title="Spot marked completed (PST)">✓ ${esc(fmtPST(en.fulfilledAt))}</span>`:''}
           ${allFulfilled?`<button class="eqwin${en.winner?' on':''}" title="${en.winner?'Winner — click to remove from the Winner Note':'Mark as the winner — adds their name + order # to the Winner Note'}" onclick="pickEventWinnerUI('${en.id}',${en.winner?'false':'true'})">🏆</button>`:''}
           <button class="eqdone${en.fulfilled?' on':''}" title="${en.fulfilled?'Undo — mark not fulfilled':'Mark this spot fulfilled'}" onclick="fulfillEventEntryUI('${en.id}',${en.fulfilled?'false':'true'})">${en.fulfilled?'✓ Done':'Fulfill'}</button>
+          <button class="eqlabel" title="Reprint this spot's label (damaged or extra copy)" onclick="printOneEventLabel('${e.id}','${en.id}')">🏷</button>
           <button class="eqspedit" title="Adjust how many spots this seat has" onclick="adjustEventEntrySpotsUI('${en.id}',${Number(en.spots)||1})">±</button>
           <button class="eqedit" title="Rename this seat" onclick="openRenameSeat('${en.id}')">✎</button>
           <button class="eqx" title="Remove this spot" onclick="removeEventEntryUI('${en.id}')">✕</button>
@@ -2683,7 +2910,11 @@
   function updateCombineBar(){
     const bar=document.getElementById('combineBar'); if(!bar) return;
     document.getElementById('cb-count').textContent = selectedKeys.size;
-    bar.classList.toggle('show', selectedKeys.size>=2);
+    // Bar shows as soon as 1 order is selected (so you can batch-print a single
+    // one); Combine still needs 2+ same-name orders, so disable it below 2.
+    bar.classList.toggle('show', selectedKeys.size>=1);
+    const cbtn=document.getElementById('cb-combine');
+    if(cbtn){ cbtn.disabled = selectedKeys.size<2; cbtn.title = selectedKeys.size<2 ? 'Select 2+ same-name orders to combine' : 'Combine the selected orders'; }
   }
   async function doCombineSelected(){
     const keys=[...selectedKeys];
