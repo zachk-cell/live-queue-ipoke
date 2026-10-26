@@ -2087,6 +2087,14 @@ export class QueueEngine extends EventEmitter {
       for (const o of this.orders.values()) add(o.id, o.createdAt || o.receivedAt || o.fulfilledAt);
       for (const o of this.sealedOrders.values()) add(o.id, o.createdAt || o.receivedAt);
       for (const e of this.eventEntries.values()) if (e.orderId) add(e.orderId, e.createdAt);
+      // Archived/ripped events (pastEvents): their order ids must stay in the ledger
+      // too, otherwise once an event is ripped + archived (which deletes its live
+      // entries) a restart's recent-orders re-fetch would find no open matching
+      // event and dump the order's items into the main Rip-Live queue. Seeding them
+      // here keeps a finished event order from ever re-entering the queue.
+      for (const pe of (this.pastEvents || [])) {
+        for (const en of (pe.entries || [])) if (en.orderId) add(en.orderId, en.createdAt || pe.archivedAt);
+      }
       for (const day of this.history) {
         for (const r of [...(day.fulfilled || []), ...(day.cancelled || []), ...(day.unfulfilled || [])]) {
           add(r.orderId, r.fulfilledAt || day.endedAt);

@@ -1030,12 +1030,12 @@
     if(key===undefined){ key=scope; scope='queue'; }
     // Normalize every field the label needs from either a Rip-Live slot (scope
     // 'queue') or a Ship-Sealed order (scope 'sealed') so both print the SAME label.
-    let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, lastId='',
+    let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, giveaway=false, lastId='',
         srcTag='', srcShortCode='', hasVault=false, oid='';
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
       uname=s.buyer||'Buyer';
-      if(isGiveawayItems(s.items)) uname='TikTok Giveaway';
+      giveaway=isGiveawayItems(s.items);
       ords=(s.orderNames&&s.orderNames.length)?s.orderNames.slice():(s.orderName?[s.orderName]:(s.id?['#'+shortId(s.id)]:[]));
       priorFulfilled=Number(s.priorFulfilled)||0;
       dupe=(state.sealed||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==s.buyerId);
@@ -1046,7 +1046,7 @@
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
       uname=e.buyer||'Buyer';
-      if(isGiveawayItems(e.items)) uname='TikTok Giveaway';
+      giveaway=isGiveawayItems(e.items);
       ords=orderNoList(e);
       countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
       priorFulfilled=Number(e.priorFulfilled)||0;
@@ -1064,6 +1064,7 @@
     // unless "Background graphics" is on — so flags are black text in a black
     // outline (no fill, no emoji) to guarantee they print. Multiple can stack.
     const flags = [];
+    if(giveaway) flags.push('TIKTOK GIVEAWAY');
     if(priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
     // Same-name distinction: if another buyer in the section shares this exact
     // display name, print a last-4 id tag so the right bag goes to the right person.
@@ -2024,14 +2025,12 @@
     let name='', orderNo='', items=[], srcShortCode='', oid='';
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
-      name=s.buyer||''; if(isGiveawayItems(s.items)) name='TikTok Giveaway';
-      orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
+      name=s.buyer||'';      orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
       items=s.items||[];
       srcShortCode=srcShort(s.source); oid=String(s.id||'');
     } else {
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
-      name=e.buyer||''; if(isGiveawayItems(e.items)) name='TikTok Giveaway';
-      orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
+      name=e.buyer||'';      orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
       items=e.items||[];
       srcShortCode=e.sourceShort||''; oid=String((e.orderIds||[])[0]||'');
     }
@@ -2105,7 +2104,7 @@
     if(!keys.length){ return; }
     // Gather each label's data (incl. the async international lookup) in parallel.
     const datas=(await Promise.all(keys.map(async (key)=>{
-      let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, lastId='',
+      let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, giveaway=false, lastId='',
           srcTag='', srcShortCode='', hasVault=false, oid='';
       if(scope==='sealed'){
         const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return null;
@@ -2116,18 +2115,18 @@
         lastId=String(s.buyerId||s.id||''); srcTag=srcShort(s.source); srcShortCode=srcTag; hasVault=!!s.hasVault; oid=String(s.id||'');
       } else {
         const e=(state.queue||[]).find(x=>x.key===key); if(!e) return null;
-        uname=e.buyer||'Buyer'; if(isGiveawayItems(e.items)) uname='TikTok Giveaway'; ords=orderNoList(e);
+        uname=e.buyer||'Buyer'; giveaway=isGiveawayItems(e.items); ords=orderNoList(e);
         countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
         priorFulfilled=Number(e.priorFulfilled)||0;
         dupe=(state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
         lastId=String(e.buyerId||''); srcTag=e.sourceShort||''; srcShortCode=e.sourceShort||''; hasVault=!!e.hasVault; oid=String((e.orderIds||[])[0]||'');
       }
       const intl=await orderIsInternational(srcShortCode, oid);
-      return { uname, ordLine: ords.join('   '), countLine, priorFulfilled, dupe, lastId, srcTag, hasVault, intl };
+      return { uname, ordLine: ords.join('   '), countLine, priorFulfilled, dupe, giveaway, lastId, srcTag, hasVault, intl };
     }))).filter(Boolean);
     if(!datas.length) return;
     const labels=datas.map(d=>{
-      const flags=[]; if(d.priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
+      const flags=[]; if(d.giveaway) flags.push('TIKTOK GIVEAWAY'); if(d.priorFulfilled>0) flags.push('EARLIER ORDERS TODAY');
       const idTag=d.dupe ? ('id …'+d.lastId.slice(-4)) : '';
       return `<div class="lbl2">`
         + flags.map(f=>`<div class="flag">${esc(f)}</div>`).join('')
@@ -2190,13 +2189,11 @@
       let name='', orderNo='', items=[], srcShortCode='', oid='';
       if(scope==='sealed'){
         const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return null;
-        name=s.buyer||''; if(isGiveawayItems(s.items)) name='TikTok Giveaway';
-        orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
+        name=s.buyer||'';        orderNo=(s.orderNames&&s.orderNames.length)?s.orderNames.join(', '):(s.orderName||('#'+shortId(s.id)));
         items=s.items||[]; srcShortCode=srcShort(s.source); oid=String(s.id||'');
       } else {
         const e=(state.queue||[]).find(x=>x.key===key); if(!e) return null;
-        name=e.buyer||''; if(isGiveawayItems(e.items)) name='TikTok Giveaway';
-        orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
+        name=e.buyer||'';        orderNo=(e.orderNames&&e.orderNames.length)?e.orderNames.join(', '):'';
         items=e.items||[]; srcShortCode=e.sourceShort||''; oid=String((e.orderIds||[])[0]||'');
       }
       const intl=await orderIsInternational(srcShortCode, oid);
