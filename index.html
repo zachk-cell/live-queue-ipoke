@@ -1031,7 +1031,7 @@
     // Normalize every field the label needs from either a Rip-Live slot (scope
     // 'queue') or a Ship-Sealed order (scope 'sealed') so both print the SAME label.
     let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, giveaway=false, lastId='',
-        srcTag='', srcShortCode='', hasVault=false, oid='';
+        srcTag='', srcShortCode='', hasVault=false, oid='', manualItemsLine='';
     if(scope==='sealed'){
       const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return;
       uname=s.buyer||'Buyer';
@@ -1047,7 +1047,7 @@
       const e=(state.queue||[]).find(x=>x.key===key); if(!e) return;
       uname=e.buyer||'Buyer';
       giveaway=isGiveawayItems(e.items);
-      ords=orderNoList(e);
+      ords=orderNoList(e); if(e.manual && (e.items||[]).length){ manualItemsLine=(e.items||[]).map(i=>((Number(i.qty)>1?(i.qty+'× '):'')+i.name)).join('   '); }
       countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
       priorFulfilled=Number(e.priorFulfilled)||0;
       dupe=(state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
@@ -1059,7 +1059,7 @@
     // International (Shopify, shipping outside the USA): add a Q:/V: customs note box
     // at the bottom-left for the team to fill in by hand.
     const intl = await orderIsInternational(srcShortCode, oid);
-    const ordLine = ords.join('   ');
+    const ordLine = [ords.join('   '), manualItemsLine].filter(Boolean).join('   ');
     // Thermal printers only lay down BLACK, and browsers skip background fills
     // unless "Background graphics" is on — so flags are black text in a black
     // outline (no fill, no emoji) to guarantee they print. Multiple can stack.
@@ -2105,7 +2105,7 @@
     // Gather each label's data (incl. the async international lookup) in parallel.
     const datas=(await Promise.all(keys.map(async (key)=>{
       let uname='Buyer', ords=[], countLine='', priorFulfilled=0, dupe=false, giveaway=false, lastId='',
-          srcTag='', srcShortCode='', hasVault=false, oid='';
+          srcTag='', srcShortCode='', hasVault=false, oid='', manualItemsLine='';
       if(scope==='sealed'){
         const s=(state.sealed||[]).find(x=>x.id===key); if(!s) return null;
         uname=s.buyer||'Buyer';
@@ -2115,14 +2115,14 @@
         lastId=String(s.buyerId||s.id||''); srcTag=srcShort(s.source); srcShortCode=srcTag; hasVault=!!s.hasVault; oid=String(s.id||'');
       } else {
         const e=(state.queue||[]).find(x=>x.key===key); if(!e) return null;
-        uname=e.buyer||'Buyer'; giveaway=isGiveawayItems(e.items); ords=orderNoList(e);
+        uname=e.buyer||'Buyer'; giveaway=isGiveawayItems(e.items); ords=orderNoList(e); if(e.manual && (e.items||[]).length){ manualItemsLine=(e.items||[]).map(i=>((Number(i.qty)>1?(i.qty+'× '):'')+i.name)).join('   '); }
         countLine=(e.orderCount>1)?(e.orderCount+' orders in this batch'):'';
         priorFulfilled=Number(e.priorFulfilled)||0;
         dupe=(state.queue||[]).some(x=>(x.buyer||'').toLowerCase()===uname.toLowerCase() && x.buyerId!==e.buyerId);
         lastId=String(e.buyerId||''); srcTag=e.sourceShort||''; srcShortCode=e.sourceShort||''; hasVault=!!e.hasVault; oid=String((e.orderIds||[])[0]||'');
       }
       const intl=await orderIsInternational(srcShortCode, oid);
-      return { uname, ordLine: ords.join('   '), countLine, priorFulfilled, dupe, giveaway, lastId, srcTag, hasVault, intl };
+      return { uname, ordLine: [ords.join('   '), manualItemsLine].filter(Boolean).join('   '), countLine, priorFulfilled, dupe, giveaway, lastId, srcTag, hasVault, intl };
     }))).filter(Boolean);
     if(!datas.length) return;
     const labels=datas.map(d=>{
