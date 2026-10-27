@@ -100,6 +100,10 @@
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
   .badge.samename{background:#4a2c00;color:#ffcf87;border:1px solid var(--pri)}
   .badge.hold{background:var(--pri);color:#2a1e00;animation:pulse 1.3s ease-in-out infinite}
+  /* Failsafe: an event product that landed in the Rip-Live queue without matching an event. */
+  .badge.evmiss{background:#3a0f0f;color:#ff9a9a;border:1px solid #7a2020;animation:pulse 1.3s ease-in-out infinite}
+  .evmiss-banner{margin:0 0 10px;padding:9px 12px;border-radius:9px;background:#3a0f0f;color:#ffc2c2;
+    border:1px solid #7a2020;font-size:12.5px;font-weight:600;line-height:1.35}
   .slot.onhold{border-color:var(--pri);box-shadow:0 0 0 1px var(--pri) inset}
   .idtag{color:var(--muted);font-size:11px;font-weight:600;flex:none}
   .who .items{font-size:12.5px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -547,6 +551,7 @@
         per page
       </label>
     </div>
+    <div id="eventMissBanner" class="evmiss-banner" style="display:none"></div>
     <div id="queue"></div>
     <div id="queue-pager" class="qpager" style="display:none"></div>
 
@@ -1454,6 +1459,30 @@
     if(node) node.classList.toggle('expanded', expandedKeys.has(key));
   }
 
+  // ── Failsafe: detect event-product orders that landed in the Rip-Live queue
+  // without matching any event (a keyword that no longer matches the product). ──
+  // These products (quack / pack-battle) should ALWAYS route into an event, so
+  // one sitting in the main queue means its event's keyword doesn't match the
+  // product name — flag it loudly and point at the likely event to fix.
+  function _canonKw(s){ return String(s==null?'':s).toLowerCase().replace(/[‘’ʼ`´]/g,"'").replace(/[“”]/g,'"').replace(/'/g,'').replace(/\s+/g,' ').trim(); }
+  const EVENT_PRODUCT_MARKERS = ['quack pack series','pack battle'];
+  function eventMissInfo(e){
+    if(!e || e.manual) return { miss:false }; // manual adds / redemptions belong here
+    const itemCanons=[]; let isEventProduct=false;
+    for(const it of (e.items||[])){ const c=_canonKw(it.name); itemCanons.push(c);
+      if(EVENT_PRODUCT_MARKERS.some(m=>c.includes(m))) isEventProduct=true; }
+    if(!isEventProduct) return { miss:false };
+    // Closest OPEN event by title-word overlap, so we can name the keyword to fix.
+    let best=null, bestScore=0;
+    for(const ev of (state.events||[])){
+      if(ev.status && ev.status!=='open') continue;
+      const words=_canonKw(ev.title).replace(/[()]/g,' ').split(/\s+/).filter(w=>w.length>2);
+      if(!words.length) continue;
+      for(const c of itemCanons){ const m=words.filter(w=>c.includes(w)).length; const sc=m/words.length; if(sc>bestScore){ bestScore=sc; best=ev; } }
+    }
+    return { miss:true, likelyEvent:(best && bestScore>=0.5)?best:null };
+  }
+
   function slotInner(e){
     const itemStr = e.items.map(i=>`${i.qty}× ${i.name}`).join(', ');
     const priBadge = e.isPriority?('<span class="badge pri">PRIORITY</span>'+(e.bigDollar?'<span class="badge bigd" title="Order total is $1,000+ — jumps the queue">💰 $1K+</span>':'')):'';
@@ -1480,6 +1509,12 @@
     // sealing, without implying the buyer asked to cancel.
     const holdBadge = e.onHold ? `<span class="badge hold" title="This order is ON HOLD in Shopify (giveaway, address/fraud, or manual review). It still needs checking before you seal/ship — but a hold is not a cancellation.">⏸ ON HOLD</span>` : '';
     const idTag = e._dupName ? `<span class="idtag" title="Buyer id (last 4) — tells same-named buyers apart">id …${esc(e._idTag)}</span>` : '';
+    // Failsafe badge: event product that didn't match any event (keyword mismatch).
+    const _emi = eventMissInfo(e);
+    const _emLikely = (_emi.miss && _emi.likelyEvent) ? esc(_emi.likelyEvent.title) : '';
+    const eventMissBadge = _emi.miss
+      ? `<span class="badge evmiss" title="This looks like an EVENT product but it matched no event, so it landed in the Rip-Live queue. ${_emLikely?('Likely event: '+_emLikely+'. '):''}Check that event's keyword exactly matches this product name (apostrophes/words count).">⚠ EVENT — NO MATCH${_emLikely?(' · '+_emLikely):''}</span>`
+      : '';
     const ordNos = `<span class="ordno">${orderNoList(e).map(n=>esc(n)).join(' ')}</span>`;
     // Expanded view: items grouped by order number, with anything the buyer added
     // after hitting #1 pulled out under a green "Added since top of queue" header.
@@ -1554,7 +1589,7 @@
       + `<input type="checkbox" class="selchk" ${selectedKeys.has(e.key)?'checked':''} title="Select this order — tick several, then drag any one to move them together (or Combine same-name orders)" onclick="event.stopPropagation()" onchange="toggleSelect('${e.key}')">`
       + `<button class="removeb" title="Remove from queue (e.g. buyer cancelled)" onclick="removeOrder('${e.key}')">✕</button>`
       + `<div class="pos">${e.position}</div>`
-      + `<div class="who"><div class="name">${esc(e.buyer)} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${manualBadge} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
+      + `<div class="who"><div class="name">${esc(e.buyer)} ${eventMissBadge} ${srcBadge} ${eBubble} ${sBubble} ${idTag} ${manualBadge} ${priBadge} ${countBadge} ${prepBadge} ${nameFlag} ${followupBadge} ${afterTopBadge} ${holdBadge} ${reorderBadge} ${dupBadge} ${backBadge} ${ordNos} <span class="nm-hint" title="Same name as the order you selected — click its ⛓ to combine">⛓ click to combine</span></div>`
       + `<div class="items">${esc(itemStr)}</div>`
       + `<div class="qtime"><span class="qtimer" data-key="${esc(e.key)}" data-since="${e.firstOrderAt||''}"></span></div></div>`
       + `<div class="slotbtns">`
@@ -1659,6 +1694,19 @@
     const matchNames = new Set();
     if(selectedKeys.size){
       for(const e of (state.queue||[])){ if(selectedKeys.has(e.key)) matchNames.add(_cnorm(e.buyer)); }
+    }
+    // Failsafe banner: event products sitting in the main queue (keyword mismatch),
+    // counted over the WHOLE queue so a search filter never hides the warning.
+    const _missSlots = (state.queue||[]).filter(e=>eventMissInfo(e).miss);
+    const _missBanner = document.getElementById('eventMissBanner');
+    if(_missBanner){
+      if(_missSlots.length){
+        const nm = _missSlots.slice(0,6).map(e=>esc(e.buyer)).join(', ');
+        _missBanner.innerHTML = '⚠ '+_missSlots.length+' order'+(_missSlots.length===1?'':'s')
+          +' look like EVENT products but matched no event — likely an event keyword that doesn\'t match the product name. '
+          +nm+(_missSlots.length>6?', …':'')+'. See the flagged row'+(_missSlots.length===1?'':'s')+' below and fix that event\'s keyword.';
+        _missBanner.style.display='';
+      } else { _missBanner.style.display='none'; _missBanner.innerHTML=''; }
     }
     const qEl = document.getElementById('queue');
     if(!list.length){
@@ -2521,6 +2569,28 @@
       totalSpots: Number(document.getElementById('ev-spots').value)||0,
       keywords: document.getElementById('ev-kw').value,
     };
+    // Failsafe (edit-time): if orders already in the Rip-Live queue look like this
+    // event but the entered keyword won't match them, the keyword probably doesn't
+    // match the product name — warn before saving so a mismatch can't silently
+    // drop future orders into the main queue.
+    try{
+      const titleWords=_canonKw(body.title).replace(/[()]/g,' ').split(/\s+/).filter(w=>w.length>2);
+      const kws=String(body.keywords||'').split(/[\n,]+/).map(s=>_canonKw(s)).filter(Boolean);
+      if(titleWords.length && kws.length){
+        const orphans=(state.queue||[]).filter(e=>{
+          if(e.manual) return false;
+          return (e.items||[]).some(it=>{ const c=_canonKw(it.name);
+            if(!EVENT_PRODUCT_MARKERS.some(m=>c.includes(m))) return false;       // event product
+            if((titleWords.filter(w=>c.includes(w)).length/titleWords.length)<0.6) return false; // looks like THIS event
+            return !kws.some(k=>c.includes(k));                                    // but the keyword won't catch it
+          });
+        });
+        if(orphans.length){
+          const sample=orphans.slice(0,3).map(e=>e.buyer).join(', ');
+          if(!confirm('Heads up: '+orphans.length+' order(s) already in the queue look like this event but your keyword won\'t match them ('+sample+').\n\nThat usually means the keyword doesn\'t exactly match the product name (watch apostrophes and exact wording). Save anyway?')) return;
+        }
+      }
+    }catch(_){}
     if(editingEventId) await postJSON('/api/events/'+encodeURIComponent(editingEventId), body);
     else await postJSON('/api/events', body);
     closeEvent();
