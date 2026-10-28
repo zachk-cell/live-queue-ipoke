@@ -541,6 +541,7 @@
     <div class="sectitle" style="display:flex;align-items:center;gap:10px">
       <span>Active queue — Rip Live — top is next</span>
       <button class="qaddb" onclick="addManualQueueUI()" title="Manually add someone into the Rip-Live queue at a chosen position (default: top)">＋ Add to queue</button>
+      <button class="qaddb" id="qSelAll" onclick="selectAllQueue()" title="Select every open order in the Active queue, then mass-print labels or packing">☑ Select all</button>
       <label class="pagesize" style="margin-left:auto">Show
         <select id="page-size" onchange="setQueuePageSize(this.value)">
           <option value="10">10</option>
@@ -557,6 +558,7 @@
 
     <div class="sectitle collapser" id="sealedhead" onclick="toggleSection('sealed')" style="display:flex;align-items:center;gap:8px">
       <span class="cav">▾</span><span>Active queue — Ship Sealed — top is next</span><span class="secount" id="sealed-count"></span>
+      <button class="qaddb" id="sealSelAll" onclick="event.stopPropagation();selectAllSealed()" title="Select every open Ship-Sealed order, then mass-print labels or packing">☑ Select all</button>
       <span style="margin-left:auto;color:#748099;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Internal · not on overlay</span>
     </div>
     <div id="sealed"></div>
@@ -2346,6 +2348,14 @@
     updateSealCombineBar();
   }
   function clearSealCombineSel(){ sealedSel.clear(); if(document.getElementById('sealed')) document.getElementById('sealed')._sig=''; renderSealed(); }
+  // Select (or clear) EVERY open Ship-Sealed order — for mass label/packing printing.
+  function selectAllSealed(){
+    const ids=(state.sealed||[]).map(s=>String(s.id));
+    const allSelected = ids.length>0 && ids.every(id=>sealedSel.has(id));
+    if(allSelected){ sealedSel.clear(); } else { ids.forEach(id=>sealedSel.add(id)); }
+    if(document.getElementById('sealed')) document.getElementById('sealed')._sig='';
+    renderSealed(); updateSealCombineBar();
+  }
   function updateSealCombineBar(){
     const bar=document.getElementById('sealCombineBar'); if(!bar) return;
     // Only keep selections that still exist in the queue.
@@ -2355,6 +2365,8 @@
     bar.classList.toggle('show', sealedSel.size>=1);
     const cbtn=document.getElementById('scb-combine');
     if(cbtn){ cbtn.disabled = sealedSel.size<2; cbtn.title = sealedSel.size<2 ? 'Select 2+ orders from the same buyer to combine' : 'Combine the selected orders'; }
+    const sa=document.getElementById('sealSelAll');
+    if(sa){ const ids=(state.sealed||[]).map(s=>String(s.id)); const all=ids.length>0 && ids.every(id=>sealedSel.has(id)); sa.textContent = all ? '☒ Deselect all' : '☑ Select all'; }
   }
   async function doCombineSealed(){
     const ids=[...sealedSel];
@@ -2974,6 +2986,14 @@
     renderQueue(); updateCombineBar();
   }
   function clearCombineSel(){ selectedKeys.clear(); renderQueue(); updateCombineBar(); }
+  // Select (or clear) EVERY open order in the Active Rip-Live queue — for mass
+  // label/packing printing. Toggles: a second click when all are selected clears.
+  function selectAllQueue(){
+    const keys=(state.queue||[]).map(e=>e.key);
+    const allSelected = keys.length>0 && keys.every(k=>selectedKeys.has(k));
+    if(allSelected){ selectedKeys.clear(); } else { keys.forEach(k=>selectedKeys.add(k)); }
+    renderQueue(); updateCombineBar();
+  }
   function updateCombineBar(){
     const bar=document.getElementById('combineBar'); if(!bar) return;
     document.getElementById('cb-count').textContent = selectedKeys.size;
@@ -2982,6 +3002,8 @@
     bar.classList.toggle('show', selectedKeys.size>=1);
     const cbtn=document.getElementById('cb-combine');
     if(cbtn){ cbtn.disabled = selectedKeys.size<2; cbtn.title = selectedKeys.size<2 ? 'Select 2+ same-name orders to combine' : 'Combine the selected orders'; }
+    const sa=document.getElementById('qSelAll');
+    if(sa){ const keys=(state.queue||[]).map(e=>e.key); const all=keys.length>0 && keys.every(k=>selectedKeys.has(k)); sa.textContent = all ? '☒ Deselect all' : '☑ Select all'; }
   }
   async function doCombineSelected(){
     const keys=[...selectedKeys];
