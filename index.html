@@ -53,6 +53,7 @@
   .selchk{width:16px;height:16px;flex:none;accent-color:var(--pri);cursor:pointer;margin:0}
   .slot.qdragging{opacity:.4}
   .slot.qdrop-before{box-shadow:inset 0 3px 0 0 var(--accent)}
+  .slot.qdrop-after{box-shadow:inset 0 -3px 0 0 var(--accent)}
   .slot.new{animation:pop .18s ease}
   .slot.priority{border-color:var(--pri);background:linear-gradient(90deg,var(--pri-bg),var(--panel))}
   .slot.bumped{outline:2px solid var(--accent)}
@@ -1268,9 +1269,21 @@
       document.body.appendChild(f); }
     f.srcdoc=doc;
   }
+  // ── Drag smoothness: freeze re-renders while ANY drag is in progress ──
+  // The socket pushes state constantly; without this, a push mid-drag re-runs
+  // render() and reorders the rows under the cursor, which is what made dragging
+  // feel janky and drop in the wrong place. We defer any render that arrives
+  // during a drag and run it once the drop/drag-end settles.
+  let dragActive=false, _renderDeferred=false;
+  function _setDragActive(on){
+    dragActive = !!on;
+    if(!on && _renderDeferred){ _renderDeferred=false; try{ render(); }catch(e){} }
+  }
+
   // ── Drag-to-reorder events (#3) ──
   let dragEventId=null;
   function evDragStart(ev,id){
+    _setDragActive(true);
     dragEventId=id;
     try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',id); }catch(e){}
     const row=ev.target.closest('.erow');
@@ -1288,6 +1301,7 @@
   function evDragEnd(ev){
     dragEventId=null;
     document.querySelectorAll('.erow.drag-over,.erow.dragging').forEach(n=>n.classList.remove('drag-over','dragging'));
+    _setDragActive(false);
   }
   function evDrop(ev,targetId){
     ev.preventDefault();
@@ -1309,6 +1323,7 @@
   // UNticked row moves just that row.
   let dragQueueKeys = null;
   function qDragStart(ev, key){
+    _setDragActive(true);
     const keys = selectedKeys.has(key) ? [...selectedKeys] : [key];
     dragQueueKeys = keys;
     try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain', key); }catch(e){}
@@ -1320,16 +1335,34 @@
     if(!dragQueueKeys) return;
     ev.preventDefault();
     try{ ev.dataTransfer.dropEffect='move'; }catch(e){}
+    const row = ev.currentTarget;
+    // Drop ABOVE this row if the cursor is in its top half, BELOW if bottom half —
+    // so you can land a slot exactly where you intend (before-only made this hard).
+    const rect = row.getBoundingClientRect();
+    const after = (ev.clientY - rect.top) > rect.height/2;
+    row._dropAfter = after;
     clearQDropMarks();
-    ev.currentTarget.classList.add('qdrop-before');
+    row.classList.add(after ? 'qdrop-after' : 'qdrop-before');
   }
-  function qDragLeave(ev){ ev.currentTarget.classList.remove('qdrop-before'); }
-  function qDropNode(ev){ qDrop(ev, (ev.currentTarget && ev.currentTarget.dataset) ? ev.currentTarget.dataset.key : null); }
+  function qDragLeave(ev){ ev.currentTarget.classList.remove('qdrop-before','qdrop-after'); }
+  function qDropNode(ev){
+    const row = ev.currentTarget;
+    let beforeKey = (row && row.dataset) ? row.dataset.key : null;
+    if(row && row._dropAfter){
+      // Insert AFTER this row = before the next row (skipping any rows being moved);
+      // null => it's the last row, so send to the bottom.
+      let next = row.nextElementSibling;
+      while(next && dragQueueKeys && next.dataset && dragQueueKeys.includes(next.dataset.key)) next = next.nextElementSibling;
+      beforeKey = (next && next.dataset) ? next.dataset.key : null;
+    }
+    qDrop(ev, beforeKey);
+  }
   function qDrop(ev, beforeKey){
     ev.preventDefault(); ev.stopPropagation();
     const keys = dragQueueKeys; dragQueueKeys = null;
     clearQDropMarks();
     document.querySelectorAll('.slot.qdragging').forEach(n=>n.classList.remove('qdragging'));
+    _setDragActive(false);
     if(!keys || !keys.length) return;
     if(beforeKey && keys.includes(beforeKey)) return; // dropped onto one of the moved rows
     postJSON('/api/queue-reorder', { keys, beforeKey: beforeKey || null })
@@ -1340,8 +1373,9 @@
     dragQueueKeys = null;
     clearQDropMarks();
     document.querySelectorAll('.slot.qdragging').forEach(n=>n.classList.remove('qdragging'));
+    _setDragActive(false);
   }
-  function clearQDropMarks(){ document.querySelectorAll('.qdrop-before').forEach(n=>n.classList.remove('qdrop-before')); }
+  function clearQDropMarks(){ document.querySelectorAll('.qdrop-before,.qdrop-after').forEach(n=>n.classList.remove('qdrop-before','qdrop-after')); }
   // Dropping onto empty space in the queue container (below the last row) sends the
   // selection to the BOTTOM.
   function qContainerInit(){
@@ -1349,6 +1383,20 @@
     if(!qEl || qEl._qinit) return; qEl._qinit = true;
     qEl.addEventListener('dragover', (ev)=>{ if(dragQueueKeys){ ev.preventDefault(); } });
     qEl.addEventListener('drop', (ev)=>{ if(dragQueueKeys && ev.target === qEl){ qDrop(ev, null); } });
+    // Auto-scroll the page while dragging near the top/bottom edge, so long
+    // queues (and the events/vault lists) are reachable without the drag stalling.
+    if(!window.__dragAutoScroll){
+      window.__dragAutoScroll = true;
+      document.addEventListener('dragover', (ev)=>{
+        if(!dragActive) return;
+        const y=ev.clientY, h=window.innerHeight||document.documentElement.clientHeight, edge=90;
+        if(y<edge) window.scrollBy(0, -Math.max(6, Math.ceil((edge-y)/4)));
+        else if(y>h-edge) window.scrollBy(0, Math.max(6, Math.ceil((y-(h-edge))/4)));
+      }, {passive:true});
+      // Safety backstop: whatever path a drag ends on, make sure renders un-freeze.
+      document.addEventListener('dragend', ()=>{ if(dragActive) _setDragActive(false); }, {passive:true});
+      document.addEventListener('drop', ()=>{ if(dragActive) setTimeout(()=>{ if(dragActive) _setDragActive(false); }, 50); }, {passive:true});
+    }
   }
 
   async function toggleLive(){
@@ -1831,6 +1879,7 @@
   // /api/variants (setTrackedVariants keeps each id's live count and the order).
   let dragVaultId=null;
   function vDragStart(ev,id){
+    _setDragActive(true);
     dragVaultId=id;
     try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',id); }catch(e){}
     const r=ev.target.closest('.vrow'); if(r){ r.classList.add('dragging'); try{ ev.dataTransfer.setDragImage(r,20,16); }catch(e){} }
@@ -1842,7 +1891,7 @@
     r.classList.add('drag-over');
   }
   function vDragLeave(ev){ ev.currentTarget.classList.remove('drag-over'); }
-  function vDragEnd(ev){ dragVaultId=null; document.querySelectorAll('.vrow.drag-over,.vrow.dragging').forEach(n=>n.classList.remove('drag-over','dragging')); }
+  function vDragEnd(ev){ dragVaultId=null; document.querySelectorAll('.vrow.drag-over,.vrow.dragging').forEach(n=>n.classList.remove('drag-over','dragging')); _setDragActive(false); }
   function vDrop(ev,targetId){
     ev.preventDefault(); ev.currentTarget.classList.remove('drag-over');
     const src=dragVaultId; dragVaultId=null;
@@ -2425,6 +2474,8 @@
   }
 
   function render(){
+    // Hold off while dragging — apply the latest state the moment the drag ends.
+    if(dragActive){ _renderDeferred = true; return; }
     const st = state.stats||{};
     const live = !!st.live;
     // Track when the CURRENT #1 slot took the top spot. Resets whenever the top
