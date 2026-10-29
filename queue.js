@@ -1915,7 +1915,10 @@ export class QueueEngine extends EventEmitter {
       for (const o of orders) {
         o.pinnedPos = i + 1;
         o.pinnedAt = now;
-        if (sel.has(String(e.key))) o.bumped = false;
+        // A slot the user actually dragged switches to the pin model — clear any
+        // forced-spot flags (insertBottom / insertPos) and stale bump, otherwise a
+        // "bottom"-pinned manual order would ignore the drag and snap back to last.
+        if (sel.has(String(e.key))) { o.bumped = false; o.insertBottom = false; o.insertPos = null; }
       }
     });
     this._markTopReached();
