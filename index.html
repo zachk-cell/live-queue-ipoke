@@ -862,11 +862,11 @@
     if(!nm){ alert('Enter a name.'); return; }
     const posRaw = window.prompt(
       'Where in the queue?\n\n'
-      + '• "top"  = the very top of the queue\n'
-      + '• "bottom"  = the very bottom\n'
-      + '• a number (e.g. 5)  = that exact spot\n'
-      + '• leave BLANK  = treat like a normal order — sorts by time, and jumps to priority automatically if the total is $1000+',
-      'top');
+      + '• leave BLANK (default) = normal order — starts at the bottom and moves UP as the orders ahead of it are fulfilled (and jumps to priority automatically at $1000+). This is how a regular order behaves.\n'
+      + '• "top"  = force it to the very top\n'
+      + '• a number (e.g. 5)  = force it to that exact spot\n'
+      + '• "bottom"  = PIN it to the very bottom — it stays last and does NOT move up',
+      '');
     if(posRaw===null) return;
     const totalRaw = window.prompt(
       'Total $ for this custom order (optional).\n'
