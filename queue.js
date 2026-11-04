@@ -1897,28 +1897,29 @@ export class QueueEngine extends EventEmitter {
       idx = others.findIndex((e) => String(e.key) === String(beforeKey));
       if (idx < 0) idx = others.length;               // target was itself moved / gone
     }
+    // Intended full order with the moved slots spliced in at the drop point.
     const newOrder = [...others.slice(0, idx), ...moving, ...others.slice(idx)];
-    // Pinned set = everything already pinned (keep its spot) plus the moved slots.
-    const pinnedSet = new Set();
-    for (const e of newOrder) {
-      if (sel.has(String(e.key)) || e.pinnedPos != null) pinnedSet.add(String(e.key));
-    }
-    // Assign pinnedPos = 1-based index in the new arrangement. Non-pinned slots keep
-    // flowing (priority/time) into the gaps. Clear `bumped` on moved slots so the pin
-    // — not a stale bump — controls their placement.
+    // Give each MOVED slot an absolute overall position (insertPos = its 1-based
+    // index in the intended order) — the SAME overall-position model that manual
+    // adds and setManualQueuePosition use, which activeQueue() splices in at that
+    // index. This lets a drag land ANYWHERE (above, below, or between the orders
+    // that flow by priority/time). The old pinnedPos model forced every dragged
+    // slot into one block at the very top (pinnedPos only ordered pins against
+    // each other, never against the non-pinned orders), so drops collapsed to the
+    // top or bottom — this replaces it. Other slots are left untouched: unpinned
+    // ones keep flowing and fill the gaps, already-placed ones keep their spot.
     const now = Date.now();
     newOrder.forEach((e, i) => {
-      if (!pinnedSet.has(String(e.key))) return;
+      if (!sel.has(String(e.key))) return;            // only the dragged slots move
       const orders = [...this.orders.values()].filter(
         (o) => o.batchKey === String(e.key) && o.status === 'queued',
       );
       for (const o of orders) {
-        o.pinnedPos = i + 1;
-        o.pinnedAt = now;
-        // A slot the user actually dragged switches to the pin model — clear any
-        // forced-spot flags (insertBottom / insertPos) and stale bump, otherwise a
-        // "bottom"-pinned manual order would ignore the drag and snap back to last.
-        if (sel.has(String(e.key))) { o.bumped = false; o.insertBottom = false; o.insertPos = null; }
+        o.insertPos = i + 1;        // absolute 1-based target spot
+        o.insertBottom = false;
+        o.pinnedPos = null;         // retire the old top-block model
+        o.pinnedAt = now;           // tiebreak among inserts landing on the same spot
+        o.bumped = false;           // the insert spot, not a stale bump, controls placement
       }
     });
     this._markTopReached();
