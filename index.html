@@ -1120,7 +1120,7 @@
         u.style.whiteSpace='nowrap';
         var us=shrinkWidth(u,30,13);
         if(u.scrollWidth>u.clientWidth){ u.style.whiteSpace='normal'; } // very long name -> wrap at floor
-        var os=o?shrinkWidth(o,13,7):0;
+        var os=o?shrinkWidth(o,16,7):0;
         // Overall height fit (rare, e.g. many order numbers): shrink the order
         // line first, then the name. overflow:hidden clips anything left over so
         // a label never bleeds past its 2.25x1.25 area.
@@ -2263,7 +2263,7 @@
           var b=lbls[i];var u=b.querySelector('.uname');var o=b.querySelector('.ord');
           if(u){u.style.whiteSpace='nowrap';var us=shrinkWidth(u,30,13);
             if(u.scrollWidth>u.clientWidth){u.style.whiteSpace='normal';}}
-          var os=o?shrinkWidth(o,13,7):0;var guard=0;
+          var os=o?shrinkWidth(o,16,7):0;var guard=0;
           while(b.scrollHeight>b.clientHeight && guard<120){
             if(o&&os>7){os--;o.style.fontSize=os+'px';}
             else if(u&&us>9){us--;u.style.fontSize=us+'px';}
