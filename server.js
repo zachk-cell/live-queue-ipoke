@@ -18,7 +18,7 @@ import { authenticator } from 'otplib';
 
 import { QueueEngine } from './queue.js';
 import { tiktokEnabled, mountAuth, startPolling, tiktokBoot, tiktokStatus, tiktokTokensForEnv, debugShops, refetchShopCipher, debugRawOrder, debugCancellations } from './tiktok.js';
-import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates, fetchOrderShipping, auditVaultOrders } from './shopify.js';
+import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates, fetchOrderShipping, auditVaultOrders, fetchVaultCatalog } from './shopify.js';
 import { startDiscord, discordEnabled } from './discord.js';
 import { startSimulator } from './simulator.js';
 
@@ -590,6 +590,28 @@ app.get('/api/vault-audit/shopify', requireAuth, async (req, res) => {
     const counters = {};
     for (const v of report.vaults) counters[v.label] = { counter: v.count, pendingUncounted: v.uncountedSum };
     res.json({ ...audit, counters });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Read-only: check each configured vault counter against the LIVE Shopify catalog.
+// For every tracked vault, lists the store items its keyword matches; also lists
+// any "VAULT" catalog item that no counter matches, so misconfigured/missing
+// keywords are obvious. Uses the engine's own _vaultMatches so it is identical to
+// how live orders are counted.
+app.get('/api/vault-catalog', requireAuth, async (req, res) => {
+  try {
+    const q = String(req.query.q || 'VAULT').slice(0, 60);
+    const cat = await fetchVaultCatalog(q);
+    if (!cat.ok) return res.json(cat);
+    const byVault = {};
+    for (const v of queue.trackedVariants) byVault[v.label] = { keyword: v.variant || '', product: v.product || '', matched: [] };
+    const unmatchedVaultItems = [];
+    for (const it of cat.items) {
+      const matches = queue._vaultMatches({ items: [it] });
+      if (!matches.length) { unmatchedVaultItems.push(it.name); continue; }
+      for (const m of matches) { if (byVault[m.label]) byVault[m.label].matched.push(it.name); }
+    }
+    res.json({ ok: true, query: q, productCount: cat.productCount, variantCount: cat.variantCount, byVault, unmatchedVaultItems, products: cat.products });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

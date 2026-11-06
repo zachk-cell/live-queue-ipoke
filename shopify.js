@@ -375,6 +375,51 @@ export async function auditVaultOrders(queue, { sinceMs, untilMs, max = 3000 } =
   };
 }
 
+// Read-only catalog check: pull every ACTIVE product whose title matches `query`
+// (default "VAULT") and flatten its variants into the SAME item shape the queue
+// builds from an order ({ name, sku, variant }) — folding product + variant title
+// exactly like normalizeShopifyOrder — so a vault keyword can be checked against
+// the real store listings the same way it is matched against live orders.
+export async function fetchVaultCatalog(query = 'VAULT', { max = 500 } = {}) {
+  if (!shopifyEnabled()) return { ok: false, error: 'shopify not enabled' };
+  const q = `title:*${String(query).replace(/[*"\\]/g, '')}*`;
+  let after = null, hasNext = true, scanned = 0;
+  const products = [];
+  const items = [];
+  while (hasNext && scanned < max) {
+    const data = await gql(
+      `query($q:String!,$after:String){
+         products(first:50, query:$q, after:$after){
+           pageInfo { hasNextPage endCursor }
+           nodes { title status variants(first:100){ nodes { title sku } } }
+         }
+       }`,
+      { q, after },
+    );
+    const conn = data && data.products;
+    if (!conn) break;
+    for (const p of (conn.nodes || [])) {
+      if (p.status && p.status !== 'ACTIVE') continue; // skip draft/archived
+      scanned++;
+      const title = (p.title || '').trim();
+      const vs = [];
+      for (const v of ((p.variants && p.variants.nodes) || [])) {
+        let variant = (v.title || '').trim();
+        if (variant.toLowerCase() === 'default title') variant = '';
+        const name = (variant && !title.toLowerCase().includes(variant.toLowerCase()))
+          ? `${title} - ${variant}` : (title || 'Item');
+        const item = { name, sku: v.sku || '', variant };
+        items.push(item);
+        vs.push({ name, sku: item.sku });
+      }
+      products.push({ title, variants: vs });
+    }
+    hasNext = !!(conn.pageInfo && conn.pageInfo.hasNextPage);
+    after = conn.pageInfo && conn.pageInfo.endCursor;
+  }
+  return { ok: true, query, productCount: products.length, variantCount: items.length, products, items };
+}
+
 // ---------------- Poller ----------------
 export function startShopifyPolling(queue) {
   // Perpetual: look back on boot to cover any redeploy gap. Non-perpetual: start
