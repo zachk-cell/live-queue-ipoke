@@ -274,11 +274,20 @@
   .vrecon-actions{margin-top:8px}
   .vrecon-btn{font-size:11px;padding:5px 9px;border-radius:7px;border:1px solid #2a3140;background:#1a2230;color:#cdd4e2;cursor:pointer}
   .vrecon-btn:hover{background:#222c3d}
-  .vkwlab{display:block;color:#748099;font-size:10.5px;margin:2px 0 3px}
-  .vrow .vkwrow{display:flex;gap:6px;align-items:center;margin:2px 0 7px}
+  /* Keyword: locked display by default; the ✏️ reveals the edit row. */
+  .vrow .vkwdisp{display:flex;align-items:center;gap:6px;margin:2px 0 7px}
+  .vrow .vkwtext{flex:1 1 auto;min-width:0;color:#aeb6c6;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vrow .vkwtext em{color:#748099;font-style:normal}
+  .vrow .vkwedit{flex:none;background:transparent;border:1px solid #2a3140;color:#9aa3b5;border-radius:7px;padding:3px 9px;font-size:12px;cursor:pointer}
+  .vrow .vkwedit:hover{background:#222c3d;color:#e8ebf2}
+  .vrow .vkwrow{display:none;gap:6px;align-items:center;margin:2px 0 7px}
+  .vrow.kw-editing .vkwrow{display:flex}
+  .vrow.kw-editing .vkwdisp{display:none}
   .vrow .vkwin{flex:1 1 auto;min-width:80px;width:auto;text-align:left;background:#1d212b;border:1px solid #272c38;color:#e8ebf2;padding:6px 8px;border-radius:8px;font-size:12.5px}
   .vrow .vkwsave{flex:none;background:#2b6bff;border:none;color:#fff;font-weight:700;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
   .vrow .vkwsave.saved{background:#25c26e}
+  .vrow .vkwcancel{flex:none;background:#242a35;border:1px solid #2a3140;color:#cdd4e2;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
+  .vrow .vkwcancel:hover{background:#2c333f}
   .vcat-sum{color:#9aa3b5;font-size:11px;margin:4px 0 6px}
   .vcat-row{border-top:1px solid #21262f;padding:6px 0;font-size:12px}
   .vcat-row.ok b{color:#25c26e}
@@ -1848,8 +1857,11 @@
         <p class="vsub">Adds +1 per unit when an order reaches the top of the queue. Shown on the public page and the ${esc(title)} overlay. Counts are cumulative and persist across streams — they only change from a sale, a Save, or a Reset.</p>
         <div class="vlist">${vs.length ? vs.map(v=>`<div class="vrow" data-id="${esc(v.id)}" ondragover="vDragOver(event)" ondragleave="vDragLeave(event)" ondrop="vDrop(event,'${esc(v.id)}')">
           <div class="vlab"><span class="vdrag" draggable="true" title="Drag to reorder" ondragstart="vDragStart(event,'${esc(v.id)}')" ondragend="vDragEnd(event)">⠿</span>${esc(v.label)}<button class="vdel" title="Remove this ${esc(title)}" onclick="removeVault('${esc(v.id)}')">✕</button></div>
-          <span class="vkwlab">Keyword — counts items whose name contains this (case-insensitive):</span>
-          <div class="vkwrow"><input class="vkwin" value="${esc(v.variant||'')}" placeholder="e.g. iPoke VAULT (Delta Reign)" /><button class="vkwsave" onclick="saveVaultKeyword('${esc(v.id)}', this)">Save keyword</button></div>
+          <div class="vkwdisp">
+            <span class="vkwtext" title="Keyword — counts items whose name contains this (case-insensitive). Click Edit to change it.">Keyword: ${v.variant?('“'+esc(v.variant)+'”'):'<em>none set</em>'}</span>
+            <button class="vkwedit" title="Edit this keyword" onclick="toggleVaultKwEdit('${esc(v.id)}', true)">✏️ Edit</button>
+          </div>
+          <div class="vkwrow"><input class="vkwin" value="${esc(v.variant||'')}" placeholder="e.g. iPoke VAULT (Delta Reign)" /><button class="vkwsave" onclick="saveVaultKeyword('${esc(v.id)}', this)">Save</button><button class="vkwcancel" onclick="toggleVaultKwEdit('${esc(v.id)}', false)">Cancel</button></div>
           <div class="vchaserow">
             <input class="vchasein" placeholder="Chase card (shown under the name on the overlay)" value="${esc(v.chase||'')}" />
             <button class="vchasesave" onclick="saveVaultChase('${esc(v.id)}', this)">Save</button>
@@ -1967,6 +1979,21 @@
       btn.textContent = 'Saved ✓'; btn.classList.add('saved');
       setTimeout(()=>{ btn.textContent = old; btn.classList.remove('saved'); btn.disabled=false; }, 1200);
     }catch{ alert("Couldn't save the chase card — check your connection and try again."); btn.textContent=old; btn.disabled=false; }
+  }
+  // Keyword stays locked (read-only) until the ✏️ is clicked, so it can't be
+  // changed by accident. Cancel restores the saved value; a successful Save
+  // re-renders the card back to the locked view.
+  function toggleVaultKwEdit(id, on){
+    const row = document.querySelector('.vrow[data-id="'+String(id).replace(/"/g,'\\"')+'"]');
+    if(!row) return;
+    if(on){
+      row.classList.add('kw-editing');
+      const inp = row.querySelector('.vkwin'); if(inp){ inp.focus(); inp.select(); }
+    } else {
+      row.classList.remove('kw-editing');
+      const cur = (state.variants||[]).find(v=>String(v.id)===String(id));
+      const inp = row.querySelector('.vkwin'); if(inp && cur) inp.value = cur.variant||'';
+    }
   }
   // Edit a Vault's keyword in place (so a typo doesn't force a delete + re-add).
   // Posts the full def set with just this id's keyword changed; the counter is
