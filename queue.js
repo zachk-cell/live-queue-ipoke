@@ -3218,6 +3218,41 @@ export class QueueEngine extends EventEmitter {
     return true;
   }
 
+  /** Manually arrange ONE event's roster (seats) by dragging. `orderedIds` is the
+   *  full new order of that event's entry ids; it is stored on the event and used
+   *  by eventQueue() to override the default purchase-time order for the real seats
+   *  (giveaway/house seats always stay pinned last). Ids that are not entries of
+   *  this event are ignored. */
+  reorderEventEntries(eventId, orderedIds) {
+    const ev = this.events.find((e) => e.id === String(eventId));
+    if (!ev || !Array.isArray(orderedIds)) return false;
+    const valid = new Set(
+      [...this.eventEntries.values()].filter((e) => e.eventId === ev.id).map((e) => String(e.id)),
+    );
+    const order = [];
+    for (const id of orderedIds) {
+      const s = String(id);
+      if (valid.has(s) && !order.includes(s)) order.push(s);
+    }
+    if (!order.length) return false;
+    ev.entryOrder = order;
+    this._persist();
+    this.emit('change', { reason: 'event-entries-reorder', eventId: ev.id });
+    return true;
+  }
+
+  /** Clear an event's manual seat arrangement so its roster returns to the original
+   *  purchase-time (received) order. */
+  resetEventEntryOrder(eventId) {
+    const ev = this.events.find((e) => e.id === String(eventId));
+    if (!ev) return false;
+    if (ev.entryOrder == null) return true; // already in natural order
+    delete ev.entryOrder;
+    this._persist();
+    this.emit('change', { reason: 'event-entries-reset', eventId: ev.id });
+    return true;
+  }
+
   /** Archive a finished event to the Past Events list (full roster preserved),
    *  then remove it from the active board. The counterpart to removeEvent that
    *  keeps a record instead of discarding it. Returns the archived record. */
@@ -3536,9 +3571,27 @@ export class QueueEngine extends EventEmitter {
     // All non-cancelled spots (queued + per-slot fulfilled), ordered by purchase
     // time. "Sold" totals come from this whole set so the cap and the meter never
     // move as spots are worked through.
+    // Manual drag arrangement (ev.entryOrder), when the admin has reordered this
+    // event's roster, overrides the default purchase-time order for the REAL seats.
+    // Giveaway/house seats always stay pinned last regardless. "Reset order" clears
+    // ev.entryOrder so the roster returns to the original received order.
+    const order = Array.isArray(ev.entryOrder) ? ev.entryOrder : null;
+    const rank = new Map();
+    if (order) order.forEach((eid, i) => rank.set(String(eid), i));
+    const isSpecial = (e) => !!(e.giveaway || e.houseSeat) || (e.createdAt || 0) >= HOUSE_SEAT_SORT_FIRST;
     const all = [...this.eventEntries.values()]
       .filter((e) => e.eventId === id && (e.status === 'queued' || e.status === 'fulfilled'))
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      .sort((a, b) => {
+        const sa = isSpecial(a) ? 1 : 0, sb = isSpecial(b) ? 1 : 0;
+        if (sa !== sb) return sa - sb;                                 // real seats first, giveaway/house last
+        if (sa === 1) return (a.createdAt || 0) - (b.createdAt || 0);  // among specials: house seats then giveaway
+        if (order) {                                                  // real seats: manual order when set
+          const ra = rank.has(a.id) ? rank.get(a.id) : Infinity;
+          const rb = rank.has(b.id) ? rank.get(b.id) : Infinity;
+          if (ra !== rb) return ra - rb;
+        }
+        return (a.createdAt || 0) - (b.createdAt || 0);               // fall back to purchase time
+      });
     const spotsOrdered = all.reduce((n, e) => n + (Number(e.spots) || 0), 0);
     const spotsUnfulfilled = all.reduce((n, e) => n + (e.status === 'fulfilled' ? 0 : (Number(e.spots) || 0)), 0);
     // Displayed rows: show every spot (per-slot fulfilled ones flagged done) for

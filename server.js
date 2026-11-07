@@ -457,6 +457,15 @@ app.post('/api/events/:id/move', requireAuth, (req, res) => {
 app.post('/api/events-reorder', requireAuth, (req, res) => {
   res.json({ ok: queue.reorderEvents((req.body && req.body.order) || []) });
 });
+// Drag seats within ONE event to a new order → { eventId, order:[entryId,...] }.
+app.post('/api/event-entries-reorder', requireAuth, (req, res) => {
+  const b = req.body || {};
+  res.json({ ok: queue.reorderEventEntries(b.eventId, b.order || []) });
+});
+// Reset one event's roster back to the original (purchase-time) order.
+app.post('/api/event-entries-reorder/:id/reset', requireAuth, (req, res) => {
+  res.json({ ok: queue.resetEventEntryOrder(req.params.id) });
+});
 // Archive a finished event to Past Events (keeps the roster) then clear it off the board.
 app.post('/api/events/:id/archive', requireAuth, (req, res) => {
   const rec = queue.archiveEvent(req.params.id);

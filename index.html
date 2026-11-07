@@ -512,6 +512,18 @@
   .eqrow.winner{background:linear-gradient(90deg, rgba(255,176,32,.14), rgba(255,176,32,0) 70%);border-radius:7px}
   .eqrow.done{opacity:.55}
   .eqrow.done .eqnm{text-decoration:line-through;color:var(--muted)}
+  /* Drag-to-reorder seats within an event */
+  .eqrow .eqdrag{cursor:grab;color:#5a627a;font-size:13px;flex:none;user-select:none;line-height:1}
+  .eqrow .eqdrag:active{cursor:grabbing}
+  .eqrow .eqdrag:hover{color:#9aa3b5}
+  .eqrow .eqdragspace{flex:none;width:13px}
+  .eqrow.seat-dragging{opacity:.45}
+  .eqrow.seat-drop-before{box-shadow:inset 0 2px 0 #4a92ff}
+  .eqrow.seat-drop-after{box-shadow:inset 0 -2px 0 #4a92ff}
+  .eqactions{display:flex;gap:6px;margin-top:6px}
+  .eqactions .eqadd{margin-top:0;width:auto;flex:1 1 auto}
+  .eqreset{flex:none;background:#161a22;border:1px solid #3a3f4b;color:#a7b0c2;cursor:pointer;font-size:12px;font-weight:700;padding:6px 10px;border-radius:8px;white-space:nowrap}
+  .eqreset:hover{color:var(--text);border-color:#ffb020}
   .eexpand{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;margin-top:7px}
   .card select,.card input[type=text],.card input[type=number]{width:100%;background:var(--panel2);
     border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px;font-size:13px;font-family:inherit;margin-top:4px}
@@ -1336,6 +1348,51 @@
     if(from<0||to<0) return;
     ids.splice(to,0, ids.splice(from,1)[0]); // drop the dragged event at the target's slot
     postJSON('/api/events-reorder',{order:ids});
+  }
+
+  // ── Drag-to-reorder SEATS within one event's side-queue ──
+  // Scoped per event (you can only move a seat within its own event). Giveaway /
+  // house seats have no handle and stay pinned last. "Reset order" clears the
+  // manual arrangement and returns the roster to the original received order.
+  let dragSeatId=null, dragSeatEventId=null;
+  function seatDragStart(ev, eventId, entryId){
+    _setDragActive(true);
+    dragSeatId=String(entryId); dragSeatEventId=String(eventId);
+    try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain', String(entryId)); }catch(e){}
+    const row=ev.target.closest('.eqrow'); if(row){ row.classList.add('seat-dragging'); try{ ev.dataTransfer.setDragImage(row,18,12); }catch(e){} }
+  }
+  function _clearSeatMarks(){ document.querySelectorAll('.eqrow.seat-drop-before,.eqrow.seat-drop-after').forEach(n=>n.classList.remove('seat-drop-before','seat-drop-after')); }
+  function seatDragOver(ev, eventId){
+    if(dragSeatId==null || dragSeatEventId!==String(eventId)) return; // only within the same event
+    ev.preventDefault(); try{ ev.dataTransfer.dropEffect='move'; }catch(e){}
+    const row=ev.currentTarget; if(row.getAttribute('data-enid')===dragSeatId) return;
+    const rect=row.getBoundingClientRect();
+    const after=(ev.clientY-rect.top) > rect.height/2;
+    row._seatAfter=after;
+    _clearSeatMarks();
+    row.classList.add(after?'seat-drop-after':'seat-drop-before');
+  }
+  function seatDragLeave(ev){ ev.currentTarget.classList.remove('seat-drop-before','seat-drop-after'); }
+  function seatDragEnd(){ dragSeatId=null; dragSeatEventId=null; _clearSeatMarks(); document.querySelectorAll('.eqrow.seat-dragging').forEach(n=>n.classList.remove('seat-dragging')); _setDragActive(false); }
+  function seatDrop(ev, eventId, targetEntryId){
+    ev.preventDefault(); ev.stopPropagation();
+    const row=ev.currentTarget; const after=!!row._seatAfter;
+    const src=dragSeatId, srcEv=dragSeatEventId; dragSeatId=null; dragSeatEventId=null;
+    _clearSeatMarks(); document.querySelectorAll('.eqrow.seat-dragging').forEach(n=>n.classList.remove('seat-dragging')); _setDragActive(false);
+    if(!src || srcEv!==String(eventId) || src===String(targetEntryId)) return;
+    const evt=(state.events||[]).find(x=>String(x.id)===String(eventId)); if(!evt) return;
+    // Build the new full order of this event's entry ids, moving src next to target.
+    let ids=(evt.entries||[]).map(x=>String(x.id)).filter(id=>id!==src);
+    let idx=ids.indexOf(String(targetEntryId));
+    if(idx<0) idx=ids.length;
+    if(after) idx+=1;
+    ids.splice(idx,0,src);
+    postJSON('/api/event-entries-reorder',{eventId:String(eventId), order:ids})
+      .catch(()=>alert("Couldn't move that seat — check your connection and try again."));
+  }
+  async function resetEventSeatOrder(eventId){
+    try{ await postJSON('/api/event-entries-reorder/'+encodeURIComponent(eventId)+'/reset'); }
+    catch{ alert("Couldn't reset the order — check your connection and try again."); }
   }
 
   // ── Rip-Live batch drag-reorder ───────────────────────────────────────────
@@ -3018,7 +3075,8 @@
       // Once every spot is fulfilled, each seat gets a 🏆 button to designate the
       // winner — it auto-fills the Winner Note with that seat's name + order #.
       const allFulfilled = e.entryCount>0 && e.unfulfilledCount===0;
-      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}${en.winner?' winner':''}">
+      const eq = entries.length ? entries.map(en=>`<div class="eqrow${en.fulfilled?' done':''}${en.oversold?' over':''}${en.winner?' winner':''}" data-enid="${esc(en.id)}"${(en.giveaway||en.houseSeat)?'':` ondragover="seatDragOver(event,'${e.id}')" ondragleave="seatDragLeave(event)" ondrop="seatDrop(event,'${e.id}','${en.id}')"`}>
+          ${(en.giveaway||en.houseSeat)?'<span class="eqdragspace"></span>':`<span class="eqdrag" draggable="true" title="Drag to move this seat to a new spot in the queue" ondragstart="seatDragStart(event,'${e.id}','${en.id}')" ondragend="seatDragEnd(event)">⠿</span>`}
           <span class="eqpos">${en.position}</span>
           <span class="eqnm">${esc(en.buyer)}</span>
           ${en.giveaway?'<span class="eqgift" title="Auto giveaway seat (always last) — rename it to the winner">🎁 GIVEAWAY</span>':(en.manual?'<span class="eqmanual" title="Manually added seat">✚</span>':'')}
@@ -3066,7 +3124,7 @@
         ${e.eventNote?`<div class="enotebox enotebox2" title="Event Note (internal) — archives with the event">🎟 <b>Event:</b> ${esc(e.eventNote)}</div>`:''}
         <div class="ekw">🔑 ${(e.keywords||[]).map(esc).join(', ')||'<i>no keywords</i>'}</div>
         <button class="eexpand" onclick="toggleEventQueue('${e.id}')">${expandedEvents.has(e.id)?'▾ Hide':'▸ Show'} side-queue (${(e.unfulfilledCount!=null && e.unfulfilledCount!==e.entryCount)?`${e.unfulfilledCount} left of ${e.entryCount}`:e.entryCount})</button>
-        <div class="equeue">${eq}<button class="eqadd" onclick="openAddSeat('${e.id}')">＋ Add seat</button></div>
+        <div class="equeue">${eq}<div class="eqactions"><button class="eqadd" onclick="openAddSeat('${e.id}')">＋ Add seat</button><button class="eqreset" title="Put this event's seats back in the original order they were received" onclick="resetEventSeatOrder('${e.id}')">↺ Reset order</button></div></div>
       </div>`;
     };
     // Condensed one-line-per-event view shown when the section is collapsed.
