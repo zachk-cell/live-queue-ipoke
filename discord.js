@@ -157,6 +157,58 @@ function buildEventRosters(queue) {
   return chunks;
 }
 
+// "Now ripping" announcement for the event currently on the stream overlay.
+// Exactly ONE such post exists at a time: when an event goes onto the overlay the
+// bot posts an @everyone ping naming it; when it comes off the overlay (toggled
+// off, ripped, or removed) that post is deleted; switching straight to another
+// event deletes the old post and posts a fresh one. Never pinned. Kept separate
+// from the pinned events summary so the summary is untouched.
+function buildAnnounceContent(ev, ping) {
+  const type = ev.type === 'wta' ? 'WTA' : 'Quack';
+  return `${ping ? '@everyone ' : ''}🔴 **${ev.title}** is ripping now! \`${type}\``;
+}
+export function createEventAnnouncer(queue) {
+  let message = null;   // the current announcement post, or null
+  let eventId = null;   // which event it announces
+  let content = '';
+  return {
+    // silent = true on a bot (re)start: re-post for an already-live event WITHOUT
+    // pinging everyone again (a redeploy mid-event shouldn't re-notify the server).
+    async sync(channel, { silent = false } = {}) {
+      const ev = (queue.events || []).find(
+        (e) => e.id === queue.activeEventId && e.status !== 'ripped',
+      ) || null;
+      const targetId = ev ? ev.id : null;
+      if (targetId && targetId === eventId && message) {
+        // Same event still live: keep the post; only edit if the title changed
+        // (edits never re-ping).
+        const next = buildAnnounceContent(ev, !silent && content.startsWith('@everyone'));
+        if (next !== content) {
+          try { await message.edit({ content: next, allowedMentions: { parse: [] } }); content = next; } catch {}
+        }
+        return true;
+      }
+      if (!targetId && !message) { eventId = null; return true; }
+      // Event changed or came off the overlay: remove the old post first.
+      const old = message;
+      message = null; eventId = targetId; content = '';
+      if (old) { try { await old.delete(); } catch {} }
+      if (!ev) return true;
+      const text = buildAnnounceContent(ev, !silent);
+      try {
+        message = await channel.send({ content: text, allowedMentions: { parse: silent ? [] : ['everyone'] } });
+        content = text;
+        return true;
+      } catch (e) {
+        eventId = null; // retry on the next tick
+        console.warn('[discord] event announcement failed (will retry):', e.message);
+        return false;
+      }
+    },
+    reset() { message = null; eventId = null; content = ''; },
+  };
+}
+
 export async function startDiscord(queue) {
   if (!discordEnabled()) {
     console.log('[discord] disabled (set DISCORD_ENABLED=true + token to enable)');
@@ -170,6 +222,7 @@ export async function startDiscord(queue) {
   let eventMessage = null; // iPoke: the compact events post (counts only), or none
   let eventThread = null;  // the thread on eventMessage that holds the full rosters
   let eventThreadMsgs = []; // roster message(s) inside that thread, in order
+  const announcer = createEventAnnouncer(queue); // "@everyone X is ripping now" post
   let dirty = false;
 
   const commands = [
@@ -306,6 +359,10 @@ export async function startDiscord(queue) {
           try { await eventMessage.pin(); } catch {}
           await syncEventThread();
         }
+        // The sweep above already deleted any old announcement; re-post it for an
+        // event that's live right now, silently (no re-ping on a restart).
+        announcer.reset();
+        if (!(await announcer.sync(channel, { silent: true }))) dirty = true;
       } else {
         // Edit the existing messages IN PLACE. Each edit is guarded on its own so a
         // transient failure on one never bubbles out and trips the fresh-start
@@ -342,6 +399,9 @@ export async function startDiscord(queue) {
           eventThread = null;
           eventThreadMsgs = [];
         }
+        // Overlay announcement: post (@everyone) when an event goes on the overlay,
+        // delete when it comes off, replace when switching events.
+        if (!(await announcer.sync(channel))) dirty = true;
       }
     } catch (e) {
       // Do NOT reset the message handles here. Nulling them forces the next refresh
