@@ -3343,6 +3343,16 @@ export class QueueEngine extends EventEmitter {
     if (!e || e.status !== 'queued') return false;
     e.status = 'cancelled';
     e.cancelledAt = Date.now();
+    // Removing an auto seat by hand is a deliberate choice for THIS event: remember
+    // it so the auto-add (run on every Shopify spot-count sync, event edit, and
+    // restart) never puts the giveaway / Nikki+Greg back on it.
+    if (e.giveaway || e.houseSeat) {
+      const ev = this.events.find((x) => x.id === e.eventId);
+      if (ev) {
+        if (e.giveaway) ev.giveawayRemoved = true;
+        if (e.houseSeat) ev.houseSeatsRemoved = true;
+      }
+    }
     this._persist();
     this.emit('change', { reason: 'event-entry-cancelled', entryId: String(entryId) });
     return true;
@@ -3482,6 +3492,7 @@ export class QueueEngine extends EventEmitter {
    *  Returns true if it added one. */
   _ensureGiveawaySeat(ev) {
     if (!this._eventHasHouseSeats(ev)) return false;
+    if (ev.giveawayRemoved) return false; // admin removed it for this event — keep it gone
     for (const e of this.eventEntries.values()) {
       if (e.eventId === ev.id && e.giveaway && e.status !== 'cancelled') return false;
     }
@@ -3515,6 +3526,7 @@ export class QueueEngine extends EventEmitter {
    *  by hand won't make it reappear. Returns true if it added them. */
   _ensureHouseSeats(ev) {
     if (!this._eventHasHouseSeats(ev)) return false;
+    if (ev.houseSeatsRemoved) return false; // admin removed Nikki/Greg for this event — keep them gone
     for (const e of this.eventEntries.values()) {
       if (e.eventId === ev.id && e.houseSeat && e.status !== 'cancelled') return false;
     }
