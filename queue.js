@@ -112,6 +112,12 @@ export class QueueEngine extends EventEmitter {
     // Free-text buyer name overrides: { [buyerId]: 'display name' }. Persist
     // until explicitly removed; propagate to every surface.
     this.nameOverrides = {};
+    // Buyer name parts { [buyerId]: { f: first, s: surname, t: lastSeenMs } } —
+    // used ONLY to tell apart different people whose short label collides
+    // ("Brian Sl." vs "Brian Sl."): they get 3+ surname letters ("Brian Sla." /
+    // "Brian Slo."), adding letters until the labels differ. Never displayed raw.
+    this.buyerNames = {};
+    this._labelCache = null; // Map buyerId -> disambiguated label (rebuilt lazily)
     // Prep state: batchKeys marked "prepped / ready to fulfill" (visual flag,
     // does not reorder the queue).
     this.preppedBatches = new Set();
@@ -192,10 +198,90 @@ export class QueueEngine extends EventEmitter {
     try { this._backfillIngestedLedger(); this._persist(); } catch (e) { console.warn('[queue] ingest ledger backfill failed:', e.message); }
   }
 
-  /** Resolve the display name for a buyer, honouring a manual override. */
+  /** Resolve the display name for a buyer, honouring a manual override. When two
+   *  DIFFERENT people share the same short label ("First La."), each gets more of
+   *  their surname — 3 letters, then more as needed — until the labels differ. */
   _displayName(buyerId, fallback) {
     const ov = this.nameOverrides[String(buyerId)];
-    return (ov && String(ov).trim()) ? String(ov).trim() : (fallback || 'Buyer');
+    if (ov && String(ov).trim()) return String(ov).trim();
+    const dis = this._disambiguatedLabel(buyerId, fallback);
+    return dis || fallback || 'Buyer';
+  }
+
+  /** Record a buyer's first name + surname (from Shopify) so colliding short
+   *  labels can be told apart. Cheap no-op when nothing changed. */
+  rememberBuyer(buyerId, first, surname) {
+    const id = String(buyerId == null ? '' : buyerId);
+    const f = String(first || '').trim().split(/\s+/)[0] || '';
+    const sn = String(surname || '').trim();
+    if (!id || !f || !sn) return false;
+    const cur = this.buyerNames[id];
+    const now = Date.now();
+    if (cur && cur.f === f && cur.s === sn) {
+      // Refresh last-seen at most once a day (keeps pruning accurate without churn).
+      if (!cur.t || now - cur.t > 86400000) cur.t = now;
+      return false;
+    }
+    this.buyerNames[id] = { f, s: sn, t: now };
+    this._labelCache = null;
+    // Keep the registry bounded: drop buyers not seen in ~120 days.
+    const ids = Object.keys(this.buyerNames);
+    if (ids.length > 5000) {
+      const cutoff = now - 120 * 86400000;
+      for (const k of ids) if ((this.buyerNames[k].t || 0) < cutoff) delete this.buyerNames[k];
+    }
+    return true;
+  }
+
+  /** Short label in the store format: "First" + first N surname letters + "." */
+  static _shortLabel(first, surname, n) {
+    const stub = surname.slice(0, n);
+    return `${first} ${stub.charAt(0).toUpperCase()}${stub.slice(1).toLowerCase()}.`;
+  }
+
+  /** The disambiguated label for a buyer, or null to use the stored label. Only
+   *  buyers currently on the board (queue, events, ship-sealed) are compared, and
+   *  only when the stored label is still the standard 2-letter one. */
+  _disambiguatedLabel(buyerId, fallback) {
+    const id = String(buyerId == null ? '' : buyerId);
+    const rec = this.buyerNames[id];
+    if (!rec) return null;
+    if (!this._labelCache) this._labelCache = this._buildLabelCache();
+    const lbl = this._labelCache.get(id);
+    if (!lbl) return null;
+    // Only replace the standard short label — never a custom/legacy/giveaway one.
+    if (fallback && fallback !== QueueEngine._shortLabel(rec.f, rec.s, 2)) return null;
+    return lbl;
+  }
+
+  _buildLabelCache() {
+    const cache = new Map();
+    const ids = new Set();
+    for (const o of this.orders.values()) if (o && o.buyerId != null) ids.add(String(o.buyerId));
+    for (const e of this.eventEntries.values()) if (e && e.buyerId != null) ids.add(String(e.buyerId));
+    for (const s of this.sealedOrders.values()) if (s && s.buyerId != null) ids.add(String(s.buyerId));
+    // Group buyers by first name + first 2 surname letters (case-insensitive).
+    const groups = new Map();
+    for (const id of ids) {
+      const r = this.buyerNames[id];
+      if (!r || !r.f || !r.s) continue;
+      const k = r.f.toLowerCase() + '|' + r.s.slice(0, 2).toLowerCase();
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push({ id, f: r.f, s: r.s, sl: r.s.toLowerCase() });
+    }
+    for (const g of groups.values()) {
+      // Only a collision when there are 2+ DIFFERENT surnames in the group. The
+      // same full name on two accounts can't be told apart by letters (and may be
+      // the same person) — those keep the standard label.
+      if (new Set(g.map((b) => b.sl)).size < 2) continue;
+      for (const b of g) {
+        const others = g.filter((o) => o.sl !== b.sl);
+        let n = 3;
+        while (n < b.sl.length && others.some((o) => o.sl.slice(0, n) === b.sl.slice(0, n))) n++;
+        cache.set(b.id, QueueEngine._shortLabel(b.f, b.s, Math.max(n, Math.min(3, b.s.length))));
+      }
+    }
+    return cache;
   }
 
   _ensureDataDir() {
@@ -228,6 +314,7 @@ export class QueueEngine extends EventEmitter {
         if (COMBINE_MODES.has(cfg.combineMode)) this.combineMode = cfg.combineMode;
         if (Number.isFinite(cfg.combineWindowMs) && cfg.combineWindowMs > 0) this.combineWindowMs = cfg.combineWindowMs;
         if (cfg.nameOverrides && typeof cfg.nameOverrides === 'object') this.nameOverrides = cfg.nameOverrides;
+        if (cfg.buyerNames && typeof cfg.buyerNames === 'object') this.buyerNames = cfg.buyerNames;
         if (Array.isArray(cfg.preppedBatches)) this.preppedBatches = new Set(cfg.preppedBatches);
         if (Array.isArray(cfg.events)) this.events = cfg.events;
         if (Array.isArray(cfg.fulfilledEventNames)) this.fulfilledEventNames = cfg.fulfilledEventNames;
@@ -734,6 +821,7 @@ export class QueueEngine extends EventEmitter {
   }
 
   _persist() {
+    this._labelCache = null; // buyers/orders may have changed → recompute name disambiguation
     try {
       this._atomicWrite(STATE_FILE, JSON.stringify([...this.orders.values()]));
       this._atomicWrite(
@@ -754,6 +842,7 @@ export class QueueEngine extends EventEmitter {
           combineMode: this.combineMode,
           combineWindowMs: this.combineWindowMs,
           nameOverrides: this.nameOverrides,
+          buyerNames: this.buyerNames,
           preppedBatches: [...this.preppedBatches],
           events: this.events,
           fulfilledEventNames: this.fulfilledEventNames,
@@ -975,6 +1064,9 @@ export class QueueEngine extends EventEmitter {
    *    merge only within the window measured from the slot's first order). */
   upsertOrder(raw) {
     const id = String(raw.id);
+    if (raw && raw.buyerSurname) {
+      try { this.rememberBuyer(raw.buyerId, raw.buyerFirst, raw.buyerSurname); } catch (e) { /* display-only */ }
+    }
     if (this.orders.has(id) || this.seenEventOrders.has(id) || this.ingestedIds.has(id)) {
       // Already known — don't re-ingest, but DO refresh the display-only fields
       // (buyer label + Shopify order name) from the latest fetch, so a change to

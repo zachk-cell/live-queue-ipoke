@@ -132,6 +132,22 @@ function firstLast(customer, fallbackName) {
   return fallbackName || 'Guest';
 }
 
+// First name + surname used by the queue to tell apart DIFFERENT buyers whose
+// short label collides ("Brian Sl." / "Brian Sl." → "Brian Sla." / "Brian Slo.").
+// Same parsing as firstLast(). Never displayed raw.
+function nameParts(customer) {
+  const first = (customer && customer.firstName || '').trim().split(/\s+/)[0] || '';
+  const surname = (customer && customer.lastName || '').trim().split(/\s+/).filter(Boolean).pop() || '';
+  return { first, surname };
+}
+
+// The queue's buyer key for a Shopify order (customer id → email → order id).
+function buyerKeyOf(cust, orderId) {
+  return cust && cust.id
+    ? 'shop:' + numericId(cust.id)
+    : (cust && cust.email ? 'shop:' + String(cust.email).toLowerCase() : orderId);
+}
+
 // Full name for the internal packing label (NOT masked). Prefers the shipping
 // address name (who it's going to), falls back to the customer's full name.
 function fullNameOf(customer, ship) {
@@ -236,9 +252,7 @@ export function normalizeShopifyOrder(o) {
   }).filter((it) => !isTipItem(it.name));
   const orderId = 'shop:' + numericId(o.id);
   const cust = o.customer || null;
-  const buyerKey = cust && cust.id
-    ? 'shop:' + numericId(cust.id)
-    : (cust && cust.email ? 'shop:' + String(cust.email).toLowerCase() : orderId);
+  const buyerKey = buyerKeyOf(cust, orderId);
   const total = money(o.currentTotalPriceSet || o.totalPriceSet);
   // TikTok giveaway: a $0 order that contains the Penny Sleeves Pro Support
   // accessory. Rename the buyer to "TikTok Giveaway", relabel the matching line
@@ -264,6 +278,10 @@ export function normalizeShopifyOrder(o) {
     // Queue/public label = "First L." (full name never shown publicly).
     buyer: isGiveaway ? 'TikTok Giveaway' : firstLast(cust, o.name),
     buyerHandle: '', // Shopify has no @handle.
+    // Name parts so the queue can add surname letters when two different buyers
+    // share the same short label. Not shown anywhere directly.
+    buyerFirst: isGiveaway ? '' : nameParts(cust).first,
+    buyerSurname: isGiveaway ? '' : nameParts(cust).surname,
     items,
     total,
     createdAt: o.processedAt || o.createdAt ? Date.parse(o.processedAt || o.createdAt) : Date.now(),
@@ -511,6 +529,7 @@ export function startShopifyPolling(queue) {
           // Backfill the buyer label in the current name format ("Logan Pa") for
           // orders ingested under an older format. A manual rename still wins.
           if (queue.setBuyerName && node.customer) queue.setBuyerName(id, firstLast(node.customer, node.name));
+          if (queue.rememberBuyer && node.customer) { const np = nameParts(node.customer); queue.rememberBuyer(buyerKeyOf(node.customer, id), np.first, np.surname); }
           // TikTok orders are ON_HOLD by default (channel-managed fulfillment) —
           // that's not a real hold, so never flag them. Clears any that were
           // previously (wrongly) flagged. Web orders honor the real status.
@@ -543,6 +562,7 @@ export function startShopifyPolling(queue) {
               const id = 'shop:' + numericId(node.id);
               if (queue.setOrderName && node.name) queue.setOrderName(id, node.name);
               if (node.customer) queue.setBuyerName(id, firstLast(node.customer, node.name));
+              if (node.customer && queue.rememberBuyer) { const np = nameParts(node.customer); queue.rememberBuyer(buyerKeyOf(node.customer, id), np.first, np.surname); }
             }
           }
         }

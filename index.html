@@ -576,7 +576,7 @@
     <div class="sectitle" style="display:flex;align-items:center;gap:10px">
       <span>Active queue — Rip Live — top is next</span>
       <button class="qaddb" onclick="addManualQueueUI()" title="Manually add someone into the Rip-Live queue at a chosen position (default: top)">＋ Add to queue</button>
-      <button class="qaddb" id="qSelAll" onclick="selectAllQueue()" title="Select every open order in the Active queue, then mass-print labels or packing">☑ Select all</button>
+      <button class="qaddb" id="qSelAll" onclick="selectAllQueue()" title="Select every open order in the Active queue that is not already prepped, then mass-print labels or packing">☑ Select all</button>
       <label class="pagesize" style="margin-left:auto">Show
         <select id="page-size" onchange="setQueuePageSize(this.value)">
           <option value="10">10</option>
@@ -3189,10 +3189,11 @@
     renderQueue(); updateCombineBar();
   }
   function clearCombineSel(){ selectedKeys.clear(); renderQueue(); updateCombineBar(); }
-  // Select (or clear) EVERY open order in the Active Rip-Live queue — for mass
-  // label/packing printing. Toggles: a second click when all are selected clears.
+  // Select (or clear) every open order in the Active Rip-Live queue that is NOT
+  // already marked prepped / ready to fulfill — for mass label/packing printing.
+  // Toggles: a second click when all of those are selected clears.
   function selectAllQueue(){
-    const keys=(state.queue||[]).map(e=>e.key);
+    const keys=(state.queue||[]).filter(e=>!e.prepped).map(e=>e.key);
     const allSelected = keys.length>0 && keys.every(k=>selectedKeys.has(k));
     if(allSelected){ selectedKeys.clear(); } else { keys.forEach(k=>selectedKeys.add(k)); }
     renderQueue(); updateCombineBar();
@@ -3206,7 +3207,7 @@
     const cbtn=document.getElementById('cb-combine');
     if(cbtn){ cbtn.disabled = selectedKeys.size<2; cbtn.title = selectedKeys.size<2 ? 'Select 2+ same-name orders to combine' : 'Combine the selected orders'; }
     const sa=document.getElementById('qSelAll');
-    if(sa){ const keys=(state.queue||[]).map(e=>e.key); const all=keys.length>0 && keys.every(k=>selectedKeys.has(k)); sa.textContent = all ? '☒ Deselect all' : '☑ Select all'; }
+    if(sa){ const keys=(state.queue||[]).filter(e=>!e.prepped).map(e=>e.key); const all=keys.length>0 && keys.every(k=>selectedKeys.has(k)); sa.textContent = all ? '☒ Deselect all' : '☑ Select all'; }
   }
   async function doCombineSelected(){
     const keys=[...selectedKeys];
