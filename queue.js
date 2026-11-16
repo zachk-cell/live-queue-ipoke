@@ -555,19 +555,40 @@ export class QueueEngine extends EventEmitter {
     const res = [];
     if (!this.trackedVariants.length) return res;
     for (const it of (order.items || [])) {
-      const text = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`.toLowerCase();
+      const raw = `${it.name || ''} ${it.sku || ''} ${it.variant || ''}`;
+      const text = raw.toLowerCase();
+      const loose = QueueEngine._vaultLoose(raw);
       const qty = it.qty || 1;
       const perItem = this._vaultUnitsPerItem(it);
       for (const v of this.trackedVariants) {
         const prod = (v.product || '').toLowerCase();
         const varn = (v.variant || '').toLowerCase();
         if (!varn) continue;
-        if ((!prod || text.includes(prod)) && text.includes(varn)) {
+        // Exact (case-insensitive) match as before, OR a forgiving match that
+        // ignores punctuation (* ( ) - : quotes), the " - " Shopify puts before
+        // the variant, and extra spaces — whole words only, so "1 Vault" never
+        // matches "11 Vault". A keyword typed slightly differently from the
+        // Shopify title (missing a "*", parentheses, etc.) still counts.
+        const lp = QueueEngine._vaultLoose(v.product || '');
+        const lv = QueueEngine._vaultLoose(v.variant || '');
+        const exact = (!prod || text.includes(prod)) && text.includes(varn);
+        const forgiving = lv.trim() !== '' && (lp.trim() === '' || loose.includes(lp)) && loose.includes(lv);
+        if (exact || forgiving) {
           res.push({ id: v.id, label: v.label, amount: perItem * qty, item: it.name || '' });
         }
       }
     }
     return res;
+  }
+
+  /** Vault-keyword canonical form: lowercase, apostrophes dropped, every other
+   *  non-letter/digit run → one space, padded with spaces so includes() only
+   *  matches whole words. */
+  static _vaultLoose(s) {
+    return ' ' + String(s == null ? '' : s).toLowerCase()
+      .replace(/[\u2018\u2019\u02bc`\u00b4']/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim() + ' ';
   }
 
   /** True if any of an order's items match a tracked (vault) variant. */
