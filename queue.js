@@ -560,6 +560,7 @@ export class QueueEngine extends EventEmitter {
       const loose = QueueEngine._vaultLoose(raw);
       const qty = it.qty || 1;
       const perItem = this._vaultUnitsPerItem(it);
+      const matchedBefore = res.length;
       for (const v of this.trackedVariants) {
         const prod = (v.product || '').toLowerCase();
         const varn = (v.variant || '').toLowerCase();
@@ -577,8 +578,39 @@ export class QueueEngine extends EventEmitter {
           res.push({ id: v.id, label: v.label, amount: perItem * qty, item: it.name || '' });
         }
       }
+      // Hand-typed items (a manual queue add, or a real order whose items were
+      // edited in the queue) won't follow the Shopify title wording. If the
+      // keyword didn't match, fall back to "says vault + names the vault": the
+      // line must contain the word "vault" AND every word of the vault's name
+      // (e.g. "Ascended Heroes") or of its keyword, in any order. Picks the one
+      // best-matching vault so a line can never count toward two vaults.
+      const typed = !!(it.custom || order.manual);
+      if (typed && res.length === matchedBefore) {
+        const best = this._typedVaultMatch(loose);
+        if (best) res.push({ id: best.id, label: best.label, amount: perItem * qty, item: it.name || '' });
+      }
     }
     return res;
+  }
+
+  /** Word-set vault match for hand-typed items (see _vaultMatches). `loose` is the
+   *  item text in _vaultLoose form. Returns the tracked vault whose name/keyword
+   *  words all appear (most words wins), or null. Requires the word "vault". */
+  _typedVaultMatch(loose) {
+    if (!loose.includes(' vault ') && !loose.includes(' vaults ')) return null;
+    const words = (s) => QueueEngine._vaultLoose(s).trim().split(' ')
+      .filter((w) => w && w !== 'vault' && w !== 'vaults' && w !== 'ipoke' && w !== 'pokemon' && w !== 'tcg');
+    let best = null; let bestScore = 0;
+    for (const v of this.trackedVariants) {
+      for (const src of [v.label, v.variant]) {
+        const ws = words(src);
+        if (!ws.length) continue;
+        if (ws.every((w) => loose.includes(' ' + w + ' ')) && ws.length > bestScore) {
+          best = v; bestScore = ws.length;
+        }
+      }
+    }
+    return best;
   }
 
   /** Vault-keyword canonical form: lowercase, apostrophes dropped, every other
@@ -1502,15 +1534,15 @@ export class QueueEngine extends EventEmitter {
   _parseItemsText(input) {
     if (Array.isArray(input)) {
       return input
-        .map((it) => ({ qty: Math.max(1, Math.floor(Number(it && it.qty) || 1)), name: String((it && it.name) || '').trim() }))
+        .map((it) => ({ qty: Math.max(1, Math.floor(Number(it && it.qty) || 1)), name: String((it && it.name) || '').trim(), custom: true }))
         .filter((it) => it.name);
     }
     const t = String(input == null ? '' : input).trim();
     if (!t) return [];
     return t.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean).map((line) => {
       const m = line.match(/^(\d+)\s*[x×]?\s+(.+)$/i); // optional leading "3x " / "3 " qty
-      if (m) return { qty: Math.max(1, parseInt(m[1], 10) || 1), name: m[2].trim() };
-      return { qty: 1, name: line };
+      if (m) return { qty: Math.max(1, parseInt(m[1], 10) || 1), name: m[2].trim(), custom: true };
+      return { qty: 1, name: line, custom: true };
     });
   }
 
@@ -1627,7 +1659,8 @@ export class QueueEngine extends EventEmitter {
     );
     if (!orders.length) return false;
     const parsed = this._parseItemsText(items);
-    for (const o of orders) { o.items = parsed; }
+    for (const o of orders) { o.items = parsed; this._recordVaultOrder(o); }
+    this._markTopReached(); // a vault typed in on the top slot counts right away
     this._persist();
     this.emit('change', { reason: 'manual-queue-items', batchKey: String(batchKey) });
     return true;
@@ -1644,6 +1677,7 @@ export class QueueEngine extends EventEmitter {
     if (!o || o.status !== 'queued') return false;
     o.items = this._parseItemsText(items);
     o.hasPriority = this._isPriorityOrder(o.items);
+    this._recordVaultOrder(o); // edited-in vault items show in the vault audit
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'order-items-edit', orderId: String(orderId) });
