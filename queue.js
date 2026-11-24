@@ -152,6 +152,9 @@ export class QueueEngine extends EventEmitter {
     // the event BEFORE it's fulfilled — a bare removeEvent, which does not
     // register it. Backfilled from pastEvents on boot so the guard is retroactive.
     this.fulfilledEventNames = []; // [{ title, canon, at, eventId }]
+    // Shopify "WTA EVENT" product stock watch, for auto-starting open-ended WTAs
+    // on restock: { inStock: bool|null, checkedAt: ms, outAt: ms (last seen out) }.
+    this.wtaProduct = { inStock: null, checkedAt: 0, outAt: 0 };
 
     // Label for the per-variant tracker card (the "Piggy Bank" on Poke Pig).
     // Configurable per store via env so iPoke can call it its own thing
@@ -318,6 +321,7 @@ export class QueueEngine extends EventEmitter {
         if (Array.isArray(cfg.preppedBatches)) this.preppedBatches = new Set(cfg.preppedBatches);
         if (Array.isArray(cfg.events)) this.events = cfg.events;
         if (Array.isArray(cfg.fulfilledEventNames)) this.fulfilledEventNames = cfg.fulfilledEventNames;
+        if (cfg.wtaProduct && typeof cfg.wtaProduct === 'object') this.wtaProduct = { inStock: null, checkedAt: 0, outAt: 0, ...cfg.wtaProduct };
         this.eventCounter = cfg.eventCounter || 0;
         this.houseSeatToggle = cfg.houseSeatToggle || 0;
         this.activeEventId = cfg.activeEventId || null;
@@ -899,6 +903,7 @@ export class QueueEngine extends EventEmitter {
           preppedBatches: [...this.preppedBatches],
           events: this.events,
           fulfilledEventNames: this.fulfilledEventNames,
+          wtaProduct: this.wtaProduct,
           eventCounter: this.eventCounter,
           activeEventId: this.activeEventId,
           houseSeatToggle: this.houseSeatToggle,
@@ -1182,7 +1187,7 @@ export class QueueEngine extends EventEmitter {
     const nonEvent = [];
     const routed = [];
     for (const it of allItems) {
-      const ev = this._matchEvent(it);
+      const ev = this._matchEvent(it, raw.createdAt);
       if (ev) routed.push({ it, ev });
       else nonEvent.push(it);
     }
@@ -2990,17 +2995,33 @@ export class QueueEngine extends EventEmitter {
    *  A full event STILL captures matching orders (they're flagged "oversold" in
    *  the roster) rather than dropping them into the main queue — so an oversell is
    *  visible and handled, never silently lost. */
-  _matchEvent(item) {
+  _matchEvent(item, createdAt) {
     if (!this.events.length) return null;
     const text = this._canon(`${item.name || ''} ${item.sku || ''} ${item.variant || ''}`);
+    const at = Number(createdAt) || Date.now();
     for (const ev of this.events) {
-      if (ev.status && ev.status !== 'open') continue;
+      if (!this._eventTakes(ev, at)) continue;
       for (const kw of (ev.keywords || [])) {
         const k = this._canon(kw);
         if (k && text.includes(k)) return ev; // capture even past capacity (oversold)
       }
     }
     return null;
+  }
+
+  /** Does this event take an order placed at `at` (ms)? Normal events: only while
+   *  open. A CLOSED WTA ("Close WTA" button) still takes orders placed BEFORE it
+   *  was closed — so one that arrives a minute late from Shopify isn't lost to the
+   *  main queue — but nothing placed after. An open-ended (auto) WTA only takes
+   *  orders placed after it opened, so leftovers from an earlier WTA never jump
+   *  into the new one. Ripped events take nothing. */
+  _eventTakes(ev, at) {
+    if (!ev) return false;
+    const st = ev.status || 'open';
+    if (st === 'ripped') return false;
+    if (ev.openedAt && at < ev.openedAt) return false;
+    if (st === 'closed') return !!ev.closedAt && at < ev.closedAt;
+    return st === 'open';
   }
 
   /** Canonicalize text for keyword matching. Shopify titles use a smart/curly
@@ -3180,7 +3201,7 @@ export class QueueEngine extends EventEmitter {
     return new Set((this.fulfilledEventNames || []).map((r) => r && r.canon).filter(Boolean));
   }
 
-  addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId, auto } = {}) {
+  addEvent({ type, title, description, totalSpots, keywords, sourceVariantId, sourceProductId, auto, openEnded, openedAt } = {}) {
     // Idempotent on Shopify variant: if an event for this variant already exists
     // (from an earlier manual add or the periodic auto-sync), don't create a
     // duplicate — return the existing one. Manual events (no sourceVariantId)
@@ -3222,6 +3243,9 @@ export class QueueEngine extends EventEmitter {
       // manually-added events.
       ...(sourceVariantId ? { sourceVariantId: String(sourceVariantId) } : {}),
       ...(sourceProductId ? { sourceProductId: String(sourceProductId) } : {}),
+      // Open-ended WTA (auto-started from the Shopify "WTA EVENT" product): no
+      // spot limit — it takes every entry placed after openedAt until "Close WTA".
+      ...(openEnded ? { openEnded: true, openedAt: Number(openedAt) || Date.now() } : {}),
     };
     this.events.push(ev);
     // (#6) An (Omega) quack always carries an auto giveaway seat (pinned last) plus
@@ -3244,7 +3268,10 @@ export class QueueEngine extends EventEmitter {
     if (patch.type != null) ev.type = (String(patch.type).toLowerCase() === 'wta') ? 'wta' : 'quack';
     if (patch.totalSpots != null) ev.totalSpots = Math.max(0, Math.floor(Number(patch.totalSpots) || 0));
     if (patch.keywords != null) ev.keywords = this._normKeywords(patch.keywords);
-    if (patch.status != null && ['open', 'ripped'].includes(patch.status)) ev.status = patch.status;
+    if (patch.status != null && ['open', 'ripped'].includes(patch.status)) {
+      ev.status = patch.status;
+      if (patch.status === 'open') delete ev.closedAt;
+    }
     // Title/type may now make this an (Omega) quack — ensure its giveaway + house seats.
     if (ev.status !== 'ripped') { this._ensureGiveawaySeat(ev); this._ensureHouseSeats(ev); }
     this._persist();
@@ -3299,7 +3326,7 @@ export class QueueEngine extends EventEmitter {
       let routeIdx = 0;
       let routedAny = false;
       for (const it of (o.items || [])) {
-        const ev = this._matchEvent(it);
+        const ev = this._matchEvent(it, o.createdAt);
         if (ev) { this._addEventEntry(ev, it, o, `sweep${routeIdx++}`); routedAny = true; }
         else remaining.push(it);
       }
@@ -3464,6 +3491,95 @@ export class QueueEngine extends EventEmitter {
     this._persist();
     this.emit('change', { reason: 'event-active', eventId: this.activeEventId });
     return this.activeEventId;
+  }
+
+  /** "Close WTA": stop taking entries. Orders placed from now on go to the main
+   *  queue; entries already in stay put (rip + archive as usual). */
+  closeEvent(id) {
+    const ev = this.events.find((e) => e.id === id);
+    if (!ev || ev.status === 'ripped') return false;
+    if (ev.status === 'closed') return true;
+    ev.status = 'closed';
+    ev.closedAt = Date.now();
+    this._persist();
+    this.emit('change', { reason: 'event-closed', eventId: id });
+    return true;
+  }
+
+  /** Undo "Close WTA". Any orders that went to the main queue meanwhile are
+   *  pulled back into the event (it's reopened, so they belong in it). */
+  reopenEvent(id) {
+    const ev = this.events.find((e) => e.id === id);
+    if (!ev || ev.status !== 'closed') return false;
+    ev.status = 'open';
+    delete ev.closedAt;
+    this._persist();
+    this.emit('change', { reason: 'event-reopened', eventId: id });
+    this.sweepQueuedIntoEvents();
+    return true;
+  }
+
+  /** Title for an auto-started WTA: "WTA Event · Mon Nov 24" (Pacific), with
+   *  " #2", " #3"… if that name is already on the board or in Past Events. */
+  _nextWtaTitle(now = Date.now()) {
+    let day = '';
+    try {
+      day = new Date(now).toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' }).replace(',', '');
+    } catch { day = new Date(now).toDateString(); }
+    const base = `WTA Event · ${day}`;
+    const taken = new Set([
+      ...this.events.map((e) => this._looseEventName(e.title || '')),
+      ...(this.pastEvents || []).map((p) => this._looseEventName((p && p.title) || '')),
+      ...(this.fulfilledEventNames || []).map((r) => this._looseEventName((r && (r.title || r.canon)) || '')),
+    ]);
+    if (!taken.has(this._looseEventName(base))) return base;
+    for (let n = 2; n < 100; n++) {
+      const t = `${base} #${n}`;
+      if (!taken.has(this._looseEventName(t))) return t;
+    }
+    return `${base} #${Date.now() % 1000}`;
+  }
+
+  /** Called by the Shopify auto-sync with the "WTA EVENT" product's stock. When
+   *  the product comes (back) into stock — first sighting, or out-of-stock → in
+   *  stock — start a new open-ended WTA, unless one for it is already open.
+   *  `p` = { title, productId, available } (available null = not tracked = in
+   *  stock). Returns the new event or null. */
+  syncWtaProduct(p) {
+    if (!p) return null;
+    const now = Date.now();
+    // No title = no active WTA product in the store → treat as out of stock.
+    const inStock = !!p.title && (p.available == null || Number(p.available) > 0);
+    const st = this.wtaProduct || (this.wtaProduct = { inStock: null, checkedAt: 0, outAt: 0 });
+    const restocked = inStock && st.inStock !== true;
+    let created = null;
+    if (restocked) {
+      const kc = this._canon(p.title);
+      const hasOpen = this.events.some((e) => (e.status || 'open') === 'open'
+        && (e.keywords || []).some((k) => { const c = this._canon(k); return c && kc.includes(c); }));
+      if (!hasOpen) {
+        // Take orders from when we last saw it out of stock (the restock happened
+        // after that), or from now on the very first sighting.
+        const openedAt = (st.inStock === false && st.outAt) ? st.outAt : now;
+        created = this.addEvent({
+          type: 'wta',
+          title: this._nextWtaTitle(now),
+          description: '',
+          totalSpots: 0,
+          keywords: [p.title],
+          sourceProductId: p.productId,
+          openEnded: true,
+          openedAt,
+        });
+        if (created) console.log(`[queue] WTA auto-started: ${created.title}`);
+      }
+    }
+    const changed = st.inStock !== inStock;
+    st.inStock = inStock;
+    st.checkedAt = now;
+    if (!inStock) st.outAt = now;
+    if (changed) this._persist();
+    return created;
   }
 
   /** Rip an event: mark every queued spot fulfilled and close the event. */
@@ -3840,6 +3956,7 @@ export class QueueEngine extends EventEmitter {
         note: ev.note || '', noteAt: ev.noteAt || null,
         eventNote: ev.eventNote || '', eventNoteAt: ev.eventNoteAt || null,
         active: this.activeEventId === ev.id, keywords: ev.keywords,
+        openEnded: !!ev.openEnded, openedAt: ev.openedAt || null, closedAt: ev.closedAt || null,
         // Full ordered side-queue (admin panel consumes this; overlay uses
         // activeEvent instead, so this stays admin-only).
         entries: q.entries,

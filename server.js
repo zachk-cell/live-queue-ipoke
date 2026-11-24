@@ -442,6 +442,10 @@ app.post('/api/events/:id/active', requireAuth, (req, res) => {
   res.json({ ok: true, activeEventId: queue.setActiveEvent(on ? req.params.id : null) });
 });
 app.post('/api/events/:id/rip', requireAuth, (req, res) => res.json({ ok: queue.ripEvent(req.params.id) }));
+// "Close WTA" / reopen: stop (or resume) taking entries; orders placed after the
+// close go to the main queue.
+app.post('/api/events/:id/close', requireAuth, (req, res) => res.json({ ok: queue.closeEvent(req.params.id) }));
+app.post('/api/events/:id/reopen', requireAuth, (req, res) => res.json({ ok: queue.reopenEvent(req.params.id) }));
 // Set/clear an event's admin win-note (who won / what they won) → { note }.
 app.post('/api/events/:id/note', requireAuth, (req, res) => res.json({ ok: queue.setEventNote(req.params.id, (req.body && req.body.note) || '') }));
 // Set/clear an event's internal Event Note (items used, etc.) → { note }.

@@ -99,6 +99,9 @@
   .badge.back{background:#12303a;color:#7fdce8}
   .badge.reorder{background:var(--done);color:#04180d;animation:pulse 1.3s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .eclosedtag{background:#3a2a10;color:#ffcf87;border:1px solid #6b4d16;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:6px}
+  .ewtaclose{background:#2a1d0c;border:1px solid #6b4d16;color:#ffcf87}
+  .ewtaclose.on{background:#10291c;border-color:#1f6b44;color:#8fe3b5}
   .badge.samename{background:#4a2c00;color:#ffcf87;border:1px solid var(--pri)}
   .badge.hold{background:var(--pri);color:#2a1e00;animation:pulse 1.3s ease-in-out infinite}
   /* Failsafe: an event product that landed in the Rip-Live queue without matching an event. */
@@ -2956,6 +2959,20 @@
     try{ await postJSON('/api/events/'+encodeURIComponent(id)+'/event-note',{note:next}); }
     catch{ alert("Couldn't save the note — check your connection and try again."); }
   }
+  async function closeWtaUI(id){
+    const ev=(state.events||[]).find(e=>e.id===id);
+    const ok = await uiConfirm({title:'Close "'+((ev&&ev.title)||'WTA')+'"?',
+      body:'Entries stop now. Anything ordered after this goes to the main queue. Entries already in stay. You can reopen it if this was a mistake.',
+      confirmText:'Close WTA', danger:false});
+    if(ok) await postJSON('/api/events/'+encodeURIComponent(id)+'/close');
+  }
+  async function reopenWtaUI(id){
+    const ev=(state.events||[]).find(e=>e.id===id);
+    const ok = await uiConfirm({title:'Reopen "'+((ev&&ev.title)||'WTA')+'"?',
+      body:'It starts taking entries again, and any WTA orders that went to the main queue since it was closed are moved back into it.',
+      confirmText:'Reopen WTA', danger:false});
+    if(ok) await postJSON('/api/events/'+encodeURIComponent(id)+'/reopen');
+  }
   async function ripEventUI(id){
     const ev=(state.events||[]).find(e=>e.id===id);
     const ok = await uiConfirm({title:'Mark "'+((ev&&ev.title)||'event')+'" fulfilled?',
@@ -3057,7 +3074,7 @@
     if(!state.perpetual){ return; }
     const box = document.getElementById('events-admin');
     const evs = state.events||[];
-    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,
+    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,e.openEnded?1:0,e.closedAt||0,
       e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), (e.note||''), (e.eventNote||''), expandedEvents.has(e.id)?1:0,
       expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.winner?'W':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
@@ -3069,8 +3086,11 @@
         ? (e.oversold ? `<span class="over">OVERSOLD ${e.spotsOrdered}/${e.totalSpots} · +${e.oversoldSpots} over</span>`
           : e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
                      : `${e.spotsOrdered}/${e.totalSpots} spots · <span class="rem">${e.spotsRemaining} left</span>`)
-        : `${e.spotsOrdered} spots ordered`;
+        : (e.type==='wta'
+            ? `${e.spotsOrdered} entr${e.spotsOrdered===1?'y':'ies'}${e.status==='closed'?' · <span style="color:#ffcf87;font-weight:700">CLOSED</span>':(e.status==='open'?' · <span class="rem">open — no limit</span>':'')}`
+            : `${e.spotsOrdered} spots ordered`);
       const ripped = e.status==='ripped';
+      const closed = e.status==='closed';
       const entries = (e.entries||[]);
       // Once every spot is fulfilled, each seat gets a 🏆 button to designate the
       // winner — it auto-fills the Winner Note with that seat's name + order #.
@@ -3102,10 +3122,14 @@
           <span class="ename">${esc(e.title)}</span>
           ${e.oversold?`<span class="oversoldtag" title="More spots ordered than this event's limit">⚠ OVERSOLD +${e.oversoldSpots}</span>`:''}
           ${e.active?'<span class="eactive">● ON OVERLAY</span>':''}
+          ${closed?`<span class="eclosedtag" title="Closed — not taking new entries; orders placed after ${esc(fmtPST(e.closedAt))} go to the main queue">🔒 CLOSED ${esc(fmtPST(e.closedAt))}</span>`:''}
           ${ripped?`<span class="estat" title="Event marked fulfilled (PST)">(ripped${e.rippedAt?' '+esc(fmtPST(e.rippedAt)):''})</span>`:''}
           <div class="ebtns">
             <button class="elabels" title="Print a label for everyone in this event's queue" onclick="printEventLabels('${e.id}')">🖨 Labels</button>
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
+            ${(e.type==='wta' && !ripped) ? (closed
+              ? `<button class="ewtaclose on" onclick="reopenWtaUI('${e.id}')" title="Start taking entries again (orders that went to the main queue since closing are pulled back in)">🔓 Reopen WTA</button>`
+              : `<button class="ewtaclose" onclick="closeWtaUI('${e.id}')" title="Stop taking entries — anything ordered after this goes to the main queue">🔒 Close WTA</button>`) : ''}
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
             <button class="enote ${e.note?'on':''}" onclick="editEventNote('${e.id}')" title="Winner Note — who won and what they won. Saved to Past Events when archived.">📝 ${e.note?'Winner ✓':'Winner Note'}</button>
             <button class="enote enote2 ${e.eventNote?'on':''}" onclick="editEventItemsNote('${e.id}')" title="Event Note (internal) — what specific items are being used for this event. Saved to Past Events when archived.">🎟 ${e.eventNote?'Event ✓':'Event Note'}</button>
@@ -3133,7 +3157,7 @@
         ? (e.oversold ? `<span class="over">OVERSOLD +${e.oversoldSpots}</span>`
           : e.soldOut ? `<span class="full">SOLD OUT ${e.spotsOrdered}/${e.totalSpots}</span>`
                      : `<span class="rem">${e.spotsRemaining} left</span> / ${e.totalSpots}`)
-        : `${e.spotsOrdered} ordered`;
+        : (e.type==='wta' ? `${e.spotsOrdered} entr${e.spotsOrdered===1?'y':'ies'}${e.status==='closed'?' · <span style="color:#ffcf87;font-weight:700">CLOSED</span>':''}` : `${e.spotsOrdered} ordered`);
       const miniSoldOut = (e.soldOut && !e.oversold) ? ' soldout' : '';
       return `<div class="emini${miniSoldOut}"><span class="etype ${e.type}">${e.type==='wta'?'WTA':'QUACK'}</span>`
         + `<span class="emininm">${esc(e.title)}</span>`

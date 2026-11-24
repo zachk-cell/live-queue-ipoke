@@ -732,6 +732,50 @@ async function fetchEventVariants() {
   return out;
 }
 
+// The store's reusable WTA product ("Pokemon TCG: iPokeTCG WTA EVENT"). One product
+// is used for every WTA; the queue starts a new open-ended WTA event each time it
+// comes back into stock (see queue.syncWtaProduct). Override the title match with
+// WTA_PRODUCT_TITLE_MATCH. Returns { title, productId, available } for the first
+// ACTIVE match (available = summed sellable stock; null if not inventory-tracked),
+// or null when there's no active WTA product (treated as out of stock).
+const WTA_TITLE_MATCH = (process.env.WTA_PRODUCT_TITLE_MATCH || 'wta event').toLowerCase();
+async function fetchWtaProduct() {
+  const data = await gql(
+    `query($q: String!) {
+       products(first: 10, query: $q) {
+         nodes {
+           id title status
+           variants(first: 20) {
+             nodes {
+               id
+               inventoryItem {
+                 tracked
+                 inventoryLevels(first: 20) { nodes { quantities(names: ["available"]) { name quantity } } }
+               }
+             }
+           }
+         }
+       }
+     }`,
+    { q: `title:*${WTA_TITLE_MATCH}*` },
+  );
+  const products = (data && data.products && data.products.nodes) || [];
+  for (const p of products) {
+    if (!String(p.title || '').toLowerCase().includes(WTA_TITLE_MATCH)) continue;
+    if (p.status && p.status !== 'ACTIVE') continue;
+    let total = 0, untracked = false;
+    for (const v of ((p.variants && p.variants.nodes) || [])) {
+      const inv = v.inventoryItem;
+      if (!inv || !inv.tracked) { untracked = true; continue; }
+      for (const lvl of ((inv.inventoryLevels && inv.inventoryLevels.nodes) || [])) {
+        for (const q of (lvl.quantities || [])) if (q && q.name === 'available') total += Number(q.quantity) || 0;
+      }
+    }
+    return { title: String(p.title || '').trim(), productId: numericId(p.id), available: untracked ? null : total };
+  }
+  return null;
+}
+
 // Build the review list: every event-product variant that doesn't already have
 // a matching event (deduped by Shopify variant id, or by canonicalized title/
 // keyword so manually-created events aren't offered again).
@@ -849,6 +893,14 @@ export async function autoSyncEvents(queue) {
         }
       }
     } catch (e) { /* swallow — spot back-fill must never disturb the poller */ }
+    // WTA product: start a new open-ended WTA when it comes (back) into stock.
+    try {
+      if (queue.syncWtaProduct) {
+        const w = await fetchWtaProduct();
+        const ev = queue.syncWtaProduct(w || { title: '', available: 0 });
+        if (ev) { added++; console.log(`[shopify] WTA product in stock — started ${ev.title}`); }
+      }
+    } catch (e) { console.warn('[shopify] WTA product check skipped:', e.message); }
   } catch (e) {
     const msg = String(e && e.message || e);
     if (msg !== _lastAutoSyncWarn) { console.warn('[shopify] event auto-sync skipped:', msg); _lastAutoSyncWarn = msg; }
