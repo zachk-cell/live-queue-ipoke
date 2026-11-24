@@ -232,7 +232,7 @@ function overlayView() {
           position: e.position, buyer: e.buyer, isPriority: e.isPriority,
           prepped: !!e.prepped, source: e.sourceShort || '',
           // Estimated wait — only when the admin has turned "Show ETA" on.
-          ...(showEta && snap.eta && snap.eta.byKey[e.key] ? { eta: snap.eta.byKey[e.key].label } : {}),
+          ...(showEta && snap.eta && snap.eta.byKey[e.key] ? { eta: snap.eta.byKey[e.key].publicLabel } : {}),
         }))
       : [],
     stats: {
@@ -826,6 +826,16 @@ function sendCsv(res, filename, records, cancelled = [], unfulfilled = []) {
 }
 // Wait-time estimates (admin): status, model and per-slot ETAs.
 app.get('/api/eta', requireAuth, (_req, res) => res.json(queue.etaSnapshot(queue.activeQueue()) || { ok: false }));
+// Raw ETA data downloads (admin) for analysis: ?file=timing | snapshots | accuracy
+app.get('/api/eta/data', requireAuth, (req, res) => {
+  const files = { timing: 'timing-log.json', snapshots: 'queue-snapshots.jsonl', accuracy: 'eta-accuracy.jsonl' };
+  const f = files[String(req.query.file || 'timing')];
+  if (!f) return res.status(400).send('file must be timing, snapshots or accuracy');
+  const full = path.resolve(process.cwd(), 'data', f);
+  if (!fs.existsSync(full)) return res.status(404).send('no data yet');
+  res.setHeader('Content-Disposition', `attachment; filename="ipoke-${f}"`);
+  res.type(f.endsWith('.json') ? 'application/json' : 'text/plain').send(fs.readFileSync(full));
+});
 
 // Past-stream summaries for the history page.
 app.get('/api/history', requireAuth, (_req, res) => res.json({ history: queue.snapshot().history }));
@@ -921,8 +931,14 @@ if (queue.perpetual) {
   queue.sweepFulfilledVaults?.();
   try { queue.captureTiming?.(); } catch (e) { console.warn('[eta] capture failed:', e.message); }
   const rolloverTimer = setInterval(() => {
-    // Log fulfillment timing BEFORE a rollover moves the day into Past Days.
+    // Log fulfillment timing BEFORE a rollover moves the day into Past Days, then
+    // record the minute's queue snapshot and score past estimates.
     try { queue.captureTiming?.(); } catch (e) { console.warn('[eta] capture failed:', e.message); }
+    try { queue.etaTick?.(); } catch (e) { console.warn('[eta] tick failed:', e.message); }
+    try {
+      const day = new Date().toISOString().slice(0, 10);
+      if (queue._etaPrunedDay !== day) { queue._etaPrunedDay = day; queue.pruneEtaFiles?.(); }
+    } catch (e) { /* housekeeping only */ }
     queue.maybeDailyRollover();
     queue.sweepFulfilledVaults?.();
     try { queue.checkAutoClose?.(); } catch (e) { console.warn('[wta] auto-close check failed:', e.message); }

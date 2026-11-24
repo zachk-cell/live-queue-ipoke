@@ -23,6 +23,8 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const TIMING_FILE = path.join(DATA_DIR, 'timing-log.json'); // iPoke: durable fulfillment timing log (ETA model)
 const TIMING_KEEP_MS = 180 * 24 * 60 * 60 * 1000;            // keep 180 days of timing data
+const QUEUE_SNAP_FILE = path.join(DATA_DIR, 'queue-snapshots.jsonl'); // iPoke: per-minute queue state (stream days)
+const ETA_ACCURACY_FILE = path.join(DATA_DIR, 'eta-accuracy.jsonl');  // iPoke: estimate vs actual, per slot
 const EVENTS_FILE = path.join(DATA_DIR, 'events-state.json'); // iPoke: event entries (side-queues)
 const SEALED_FILE = path.join(DATA_DIR, 'sealed-state.json'); // iPoke: Ship-Sealed side-queue (internal pack/ship)
 const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
@@ -945,10 +947,13 @@ export class QueueEngine extends EventEmitter {
   }
 
   // ── ETA: timing log + estimates ──────────────────────────────────────────
-  /** Record every fulfillment (Rip-Live slots, manual adds and event spots) in
-   *  the durable timing log — when it was placed, when it hit the top, when it
-   *  was fulfilled and how big it was. Seeds from Past Days on first run.
-   *  Idempotent (keyed by order / entry id). Returns how many were added. */
+  // Everything the wait-time estimates learn from is recorded here, durably:
+  //  • timing-log.json   — every fulfillment (Rip-Live slot, manual add, event
+  //                         spot) + one summary per finished event, 180 days
+  //  • queue-snapshots.jsonl — the queue's state once a minute on stream days
+  //  • eta-accuracy.jsonl    — each slot's estimates vs. when it actually hit the top
+  /** Record every fulfillment in the durable timing log. Seeds from Past Days and
+   *  Past Events on first run. Idempotent (keyed by id). Returns how many were added. */
   captureTiming() {
     let added = 0;
     const push = (r) => {
@@ -956,21 +961,56 @@ export class QueueEngine extends EventEmitter {
       this._timingIds.add(r.id); this.timingLog.push(r); added++;
     };
     const qtyOf = (items) => (items || []).reduce((n, i) => n + (Number(i && i.qty) || 1), 0) || 1;
+    const itemsOf = (items) => (items || []).slice(0, 12).map((i) => ({ n: String((i && i.name) || '').slice(0, 80), q: Number(i && i.qty) || 1 }));
     for (const day of (this.history || [])) {
       for (const f of (day.fulfilled || [])) {
-        if (f && f.fulfilledAt) push({ id: 'o:' + f.orderId, kind: 'main', ts: Number(f.fulfilledAt), qty: qtyOf(f.items) });
+        if (f && f.fulfilledAt) push({ id: 'o:' + f.orderId, kind: 'main', ts: Number(f.fulfilledAt), qty: qtyOf(f.items), lines: (f.items || []).length, total: Number(f.total) || 0, items: itemsOf(f.items) });
       }
     }
     for (const o of this.orders.values()) {
       if (o.status !== 'fulfilled' || !o.fulfilledAt) continue;
       push({
-        id: 'o:' + o.id, kind: 'main', ts: Number(o.fulfilledAt), qty: qtyOf(o.items), key: o.batchKey || null,
-        top: o.reachedTopAt || null, placed: o.createdAt || null, ...(o.manual ? { manual: true } : {}),
+        id: 'o:' + o.id, kind: 'main', ts: Number(o.fulfilledAt), qty: qtyOf(o.items), lines: (o.items || []).length,
+        total: Number(o.total) || 0, items: itemsOf(o.items), key: o.batchKey || null,
+        top: o.reachedTopAt || null, placed: o.createdAt || null, received: o.receivedAt || null,
+        source: o.source || '', ...(o.manual ? { manual: true } : {}), ...(o.hasPriority || o.manualPriority ? { priority: true } : {}),
+        ...(o.bumped ? { bumped: true } : {}), ...(o.insertPos != null || o.insertBottom ? { placedManually: true } : {}),
+        ...(o.vaultCounted ? { vault: true } : {}),
       });
     }
+    const evById = new Map(this.events.map((e) => [e.id, e]));
     for (const e of this.eventEntries.values()) {
       if (e.status !== 'fulfilled' || !e.fulfilledAt) continue;
-      push({ id: 'e:' + e.id, kind: 'event', ts: Number(e.fulfilledAt), qty: Number(e.spots) || 1, eventId: e.eventId, placed: e.createdAt || null });
+      const ev = evById.get(e.eventId);
+      push({
+        id: 'e:' + e.id, kind: 'event', ts: Number(e.fulfilledAt), qty: Number(e.spots) || 1, eventId: e.eventId,
+        evType: ev ? ev.type : null, placed: e.createdAt || null,
+        ...(e.giveaway ? { giveaway: true } : {}), ...(e.houseSeat ? { houseSeat: true } : {}), ...(e.manual ? { manual: true } : {}),
+      });
+    }
+    // Past Events: each spot's fulfill time + one summary per event (kept even
+    // after the 200-event Past Events list rolls over).
+    const liveLogged = new Set(this.timingLog.filter((r) => r.kind === 'event' && !r.src).map((r) => String(r.eventId)));
+    for (const pe of (this.pastEvents || [])) {
+      const id = pe.id || pe.eventId || (pe.title + ':' + (pe.createdAt || ''));
+      const fs = [];
+      const skipSpots = liveLogged.has(String(id)); // spots already logged while it was on the board
+      (pe.entries || []).forEach((en, i) => {
+        if (!en || !en.fulfilledAt) return;
+        fs.push(Number(en.fulfilledAt));
+        if (skipSpots && !en.id) return;
+        push({ src: 'past', id: 'e:' + (en.id || (id + ':' + i)), kind: 'event', ts: Number(en.fulfilledAt), qty: Number(en.spots) || 1, eventId: String(id), evType: pe.type || null, placed: en.createdAt || null, ...(en.giveaway ? { giveaway: true } : {}), ...(en.houseSeat ? { houseSeat: true } : {}) });
+      });
+      if (fs.length) {
+        fs.sort((a, b) => a - b);
+        push({
+          id: 'r:' + id, kind: 'eventSummary', ts: Number(pe.rippedAt || fs[fs.length - 1]), eventId: String(id),
+          title: String(pe.title || '').slice(0, 120), evType: pe.type || null, spots: Number(pe.spotsOrdered) || 0,
+          entries: Number(pe.entryCount) || (pe.entries || []).length, createdAt: pe.createdAt || null,
+          soldOutAt: pe.soldOutAt || null, firstFulfill: fs[0], lastFulfill: fs[fs.length - 1], rippedAt: pe.rippedAt || null,
+          totalSpots: Number(pe.totalSpots) || 0, archivedAt: pe.archivedAt || null,
+        });
+      }
     }
     const cutoff = Date.now() - TIMING_KEEP_MS;
     if (added || (this.timingLog.length && this.timingLog[0].ts < cutoff)) {
@@ -982,8 +1022,8 @@ export class QueueEngine extends EventEmitter {
     return added;
   }
 
-  /** Main-queue fulfillment records for the model: the log plus anything
-   *  fulfilled since the last capture. */
+  /** Rip-Live fulfillment records for the model: the log plus anything fulfilled
+   *  since the last capture. */
   _etaRecords() {
     const out = this.timingLog.filter((r) => r.kind === 'main').map((r) => ({ ts: r.ts, qty: r.qty, key: r.key || r.id }));
     for (const o of this.orders.values()) {
@@ -994,29 +1034,85 @@ export class QueueEngine extends EventEmitter {
     return out;
   }
 
+  /** Event spot fulfills grouped by event, for learning event rip time. */
+  _etaEventRecords() {
+    const by = new Map();
+    const add = (id, ts, spots) => {
+      if (!Number.isFinite(ts)) return;
+      if (!by.has(id)) by.set(id, { id, fulfills: [], seen: new Set() });
+      by.get(id).fulfills.push({ ts, spots });
+    };
+    const seen = new Set();
+    for (const r of this.timingLog) {
+      if (r.kind !== 'event') continue;
+      seen.add(r.id);
+      add(String(r.eventId), r.ts, r.qty);
+    }
+    for (const e of this.eventEntries.values()) {
+      if (e.status === 'fulfilled' && e.fulfilledAt && !seen.has('e:' + e.id)) add(String(e.eventId), Number(e.fulfilledAt), Number(e.spots) || 1);
+    }
+    return [...by.values()];
+  }
+
+  /** Events expected to be ripped before the queue moves on: the one on the
+   *  overlay (ripped first), then sold-out quacks / closed WTAs not yet ripped
+   *  (right after the current top slot), in the order they sold out / closed. */
+  _etaDueEvents(model) {
+    const due = [];
+    for (const ev of this.events) {
+      if (ev.status === 'ripped') continue;
+      const q = this.eventQueue(ev.id);
+      if (!q) continue;
+      const left = Number(q.spotsUnfulfilled) || 0;
+      if (left <= 0) continue;
+      const started = (q.entries || []).some((e) => e.fulfilled);
+      const active = this.activeEventId === ev.id;
+      const ready = q.soldOut || ev.status === 'closed';
+      if (!active && !ready) continue;
+      due.push({
+        id: ev.id, title: ev.title, spots: left, front: active,
+        at: active ? 0 : (ev.soldOutAt || ev.closedAt || ev.createdAt || 0),
+        work: ETA.eventWork(model, left, started),
+      });
+    }
+    return due.sort((a, b) => (b.front - a.front) || (a.at - b.at));
+  }
+
   /** Estimated time each queued slot reaches the top (admin), plus model info.
    *  `queue` = activeQueue() result (passed in so snapshot doesn't rebuild it). */
   etaSnapshot(queue, now = Date.now()) {
     try {
       const recs = this._etaRecords();
-      if (!this._etaModel || now - this._etaModelAt > 10 * 60 * 1000 || Math.abs(recs.length - this._etaModelN) >= 5) {
-        this._etaModel = ETA.learn(recs, now);
+      const evRecs = this._etaEventRecords();
+      const nEv = evRecs.reduce((n, e) => n + e.fulfills.length, 0);
+      if (!this._etaModel || now - this._etaModelAt > 10 * 60 * 1000 || Math.abs(recs.length + nEv - this._etaModelN) >= 5) {
+        this._etaModel = ETA.learn(recs, now, evRecs);
         this._etaModelAt = now;
-        this._etaModelN = recs.length;
+        this._etaModelN = recs.length + nEv;
       }
       const model = this._etaModel;
       let lastActivity = 0;
+      const evTimes = [];
       for (const r of recs) if (r.ts > lastActivity && r.ts <= now) lastActivity = r.ts;
-      for (const e of this.eventEntries.values()) if (e.fulfilledAt && e.fulfilledAt > lastActivity && e.fulfilledAt <= now) lastActivity = e.fulfilledAt;
-      const pace = ETA.paceFactor(model, recs.filter((r) => r.ts >= now - 12 * 60 * 60 * 1000), now);
+      for (const e of evRecs) for (const f of e.fulfills) {
+        if (f.ts <= now) { evTimes.push(f.ts); if (f.ts > lastActivity) lastActivity = f.ts; }
+      }
+      const pace = ETA.paceFactor(model, recs.filter((r) => r.ts >= now - 12 * 60 * 60 * 1000), now, evTimes);
+      const due = this._etaDueEvents(model);
       const slots = (queue || this.activeQueue()).map((e) => ({ key: e.key, qty: e.itemCount, reachedTopAt: e.reachedTopAt }));
-      const est = ETA.estimate(model, slots, { now, lastActivity, pace });
+      const est = ETA.estimate(model, slots, { now, lastActivity, pace, due });
+      const anyFront = due.some((d) => d.front);
       const byKey = {};
       slots.forEach((s, i) => {
         const e = est.byKey[s.key];
         if (!e) return;
-        const top = i === 0 && est.status !== 'off';
-        byKey[s.key] = { ...e, label: top ? (est.status === 'live' ? 'on now' : 'next up') : ETA.etaLabel(e, now) };
+        const top = i === 0 && est.status !== 'off' && !anyFront;
+        byKey[s.key] = {
+          ...e,
+          label: top ? (est.status === 'live' ? 'on now' : 'next up') : ETA.etaLabel(e, now),
+          // Conservative, rounded-up single number for viewers (overlay / public).
+          publicLabel: ETA.publicLabel(e, now, top && est.status === 'live'),
+        };
       });
       const sd = ETA.streamDay(now);
       const t = model.types[sd.type || 'wk'];
@@ -1027,12 +1123,17 @@ export class QueueEngine extends EventEmitter {
         pace: Math.round(est.pace * 100) / 100,
         clearAt: est.clearAt ? { ...est.clearAt, label: ETA.etaLabel(est.clearAt, now) } : null,
         byKey,
+        due: due.map((d) => ({ title: d.title, spots: d.spots, front: d.front, min: Math.round(d.work / 6000) / 10 })),
+        accuracy: this._etaAccuracySummary(now),
         model: {
           profile: sd.type === 'fri' ? 'Friday' : 'Mon–Thu',
           slotMin: Math.round(t.base / 6000) / 10,      // minutes for a 1-item slot
           perItemSec: Math.round(t.per / 1000),         // seconds per extra item
           usualStart: hm(t.start), usualEnd: hm(t.end),
           breakFactor: Math.round(t.bf * 100) / 100,
+          eventLoadPct: Math.round((t.evShare || 0) * 100),
+          eventSpotSec: Math.round((model.event && model.event.b || 0) / 1000),
+          eventSamples: (model.event && model.event.samples) || 0,
           samples: model.samples, days: t.days,
           logged: this.timingLog.length,
         },
@@ -1041,6 +1142,104 @@ export class QueueEngine extends EventEmitter {
       console.warn('[queue] ETA failed:', e.message);
       return null;
     }
+  }
+
+  /** Once a minute: log a queue snapshot (stream days) and score past estimates.
+   *  Each slot's estimate is sampled every 5 min; when it reaches the top, the
+   *  error at ~10/30/60/120 min ahead goes to eta-accuracy.jsonl. */
+  etaTick(now = Date.now()) {
+    try {
+      const queue = this.activeQueue();
+      const eta = this.etaSnapshot(queue, now);
+      if (!eta) return;
+      if (!this._etaPreds) this._etaPreds = new Map();
+      const live = new Set(queue.map((e) => e.key));
+      queue.forEach((e, i) => {
+        const p = eta.byKey[e.key];
+        let rec = this._etaPreds.get(e.key);
+        if (!rec) { rec = { first: now, firstPos: i + 1, qty: e.itemCount, samples: [] }; this._etaPreds.set(e.key, rec); }
+        const last = rec.samples[rec.samples.length - 1];
+        if (p && (!last || now - last.at >= 5 * 60 * 1000) && i > 0) {
+          rec.samples.push({ at: now, pos: i + 1, mid: p.mid, lo: p.lo, hi: p.hi, status: eta.status });
+          if (rec.samples.length > 120) rec.samples.splice(1, 1);
+        }
+        // Reached the top → score it.
+        if (i === 0 && e.reachedTopAt && !rec.scored) {
+          rec.scored = true;
+          if (!rec.samples.length) return; // was already on top before we estimated it
+          const actual = e.reachedTopAt;
+          const hz = {};
+          for (const h of [10, 30, 60, 120]) {
+            const target = actual - h * 60 * 1000;
+            let best = null;
+            for (const s of rec.samples) if (s.at <= target + 2.5 * 60 * 1000 && (!best || Math.abs(s.at - target) < Math.abs(best.at - target))) best = s;
+            if (best && Math.abs(best.at - target) <= 10 * 60 * 1000) {
+              hz[h] = { errMin: Math.round((actual - best.mid) / 6000) / 10, inRange: actual >= best.lo && actual <= best.hi, pos: best.pos, status: best.status };
+            }
+          }
+          const out = { key: e.key, reachedAt: actual, firstSeen: rec.first, firstPos: rec.firstPos, qty: e.itemCount, horizons: hz };
+          if (rec.samples[0]) out.firstEstimateErrMin = Math.round((actual - rec.samples[0].mid) / 6000) / 10;
+          this._appendJsonl(ETA_ACCURACY_FILE, out);
+          (this._etaAccRecent || (this._etaAccRecent = [])).push(out);
+          if (this._etaAccRecent.length > 500) this._etaAccRecent.shift();
+        }
+      });
+      for (const k of [...this._etaPreds.keys()]) if (!live.has(k)) this._etaPreds.delete(k);
+      // Queue snapshot — stream days only (incl. Friday's late night).
+      if (ETA.streamDay(now).type || eta.status !== 'off') {
+        this._appendJsonl(QUEUE_SNAP_FILE, {
+          ts: now, status: eta.status, pace: eta.pace, len: queue.length,
+          items: queue.reduce((n, e) => n + (e.itemCount || 0), 0),
+          value: Math.round(queue.reduce((n, e) => n + (Number(e.total) || 0), 0)),
+          priority: queue.filter((e) => e.isPriority).length,
+          held: this.heldSlots().length,
+          top: queue[0] ? { qty: queue[0].itemCount, atTopMin: queue[0].reachedTopAt ? Math.round((now - queue[0].reachedTopAt) / 6000) / 10 : null } : null,
+          activeEvent: this.activeEventId || null,
+          due: (eta.due || []).map((d) => ({ spots: d.spots, front: d.front })),
+          openEvents: this.events.filter((e) => e.status !== 'ripped').length,
+          clearMin: eta.clearAt ? Math.round((eta.clearAt.mid - now) / 6000) / 10 : null,
+        });
+      }
+    } catch (e) {
+      console.warn('[queue] ETA tick failed:', e.message);
+    }
+  }
+
+  _appendJsonl(file, obj) {
+    try { fs.appendFileSync(file, JSON.stringify(obj) + '\n'); }
+    catch (e) { console.warn('[queue] append failed:', path.basename(file), e.message); }
+  }
+
+  /** Trim the append-only ETA files to the retention window (daily). */
+  pruneEtaFiles(now = Date.now()) {
+    const cutoff = now - TIMING_KEEP_MS;
+    for (const [file, field] of [[QUEUE_SNAP_FILE, 'ts'], [ETA_ACCURACY_FILE, 'reachedAt']]) {
+      try {
+        if (!fs.existsSync(file)) continue;
+        const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+        const keep = lines.filter((l) => { try { return JSON.parse(l)[field] >= cutoff; } catch { return false; } });
+        if (keep.length !== lines.length) this._atomicWrite(file, keep.join('\n') + (keep.length ? '\n' : ''));
+      } catch (e) { console.warn('[queue] prune failed:', path.basename(file), e.message); }
+    }
+  }
+
+  /** Recent accuracy (last 7 days): share of slots that reached the top inside
+   *  the range estimated ~30 min earlier, and the typical miss. */
+  _etaAccuracySummary(now = Date.now()) {
+    if (!this._etaAccRecent) {
+      this._etaAccRecent = [];
+      try {
+        if (fs.existsSync(ETA_ACCURACY_FILE)) {
+          const lines = fs.readFileSync(ETA_ACCURACY_FILE, 'utf8').split('\n').filter(Boolean).slice(-500);
+          for (const l of lines) { try { this._etaAccRecent.push(JSON.parse(l)); } catch { /* skip */ } }
+        }
+      } catch { /* none yet */ }
+    }
+    const recent = this._etaAccRecent.filter((r) => r.reachedAt >= now - 7 * 24 * 60 * 60 * 1000);
+    const h30 = recent.map((r) => r.horizons && r.horizons[30]).filter(Boolean);
+    if (!h30.length) return { n: 0 };
+    const errs = h30.map((x) => Math.abs(x.errMin)).sort((a, b) => a - b);
+    return { n: h30.length, inRangePct: Math.round(100 * h30.filter((x) => x.inRange).length / h30.length), medianMissMin: errs[Math.floor(errs.length / 2)] };
   }
 
   _persistHistory() {
@@ -3564,6 +3763,9 @@ export class QueueEngine extends EventEmitter {
       .filter((e) => e.eventId === id && (e.status === 'queued' || e.status === 'fulfilled'))
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     const entries = all.map((e, i) => ({
+      id: e.id,                                       // (kept for the ETA timing log)
+      ...(e.giveaway ? { giveaway: true } : {}),
+      ...(e.houseSeat ? { houseSeat: true } : {}),
       position: i + 1,
       buyer: this._displayName(e.buyerId, e.buyer),
       spots: e.spots,

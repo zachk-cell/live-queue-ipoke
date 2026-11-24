@@ -114,29 +114,98 @@ function fitTimes(samples, fallback) {
   return { base: clamp(base, 30 * 1000, 20 * MIN), per: perItem };
 }
 
-/** Learn the model from fulfillment records [{ ts, qty, key? }]. */
-export function learn(records, now = Date.now()) {
+// ── Event rip time ────────────────────────────────────────────────────────
+const EV_SETUP = 90 * 1000;   // opening/intro before the first spot is marked done
+
+/** Learn how long an event takes to rip from per-spot fulfill times.
+ *  events: [{ id, fulfills: [{ ts, spots }] }]. Events marked done in one click
+ *  (all spots share a timestamp) carry no timing and are skipped. Returns
+ *  { a, b, samples, windows } — duration ≈ EV_SETUP + a + b × spots — plus each
+ *  timed event's on-air window [start, end] for separating it from Rip-Live time. */
+export function learnEvents(events, now = Date.now()) {
+  const pts = [];
+  const windows = [];
+  for (const ev of (events || [])) {
+    const fs = (ev.fulfills || []).filter((f) => Number.isFinite(f.ts) && f.ts <= now && f.ts >= now - LOOKBACK)
+      .sort((x, y) => x.ts - y.ts);
+    if (fs.length < 3) continue;
+    const uniq = new Set(fs.map((f) => Math.round(f.ts / 2000))).size;
+    if (uniq <= 2) continue;
+    const span = fs[fs.length - 1].ts - fs[0].ts;
+    if (span <= 0 || span > 4 * HOUR) continue;
+    const spots = fs.reduce((n, f) => n + (Number(f.spots) || 1), 0);
+    pts.push({ x: spots, y: span });
+    windows.push({ start: fs[0].ts - EV_SETUP, end: fs[fs.length - 1].ts, spots });
+  }
+  let a = 0, b = 35 * 1000;
+  if (pts.length >= 8) {
+    const mx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+    const my = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    let sxy = 0, sxx = 0;
+    for (const p of pts) { sxy += (p.x - mx) * (p.y - my); sxx += (p.x - mx) ** 2; }
+    b = sxx > 0 ? sxy / sxx : b;
+    b = clamp(b, 10 * 1000, 90 * 1000);
+    a = clamp(my - b * mx, -2 * MIN, 5 * MIN);
+  }
+  return { a, b, samples: pts.length, windows };
+}
+
+/** Predicted time to rip `spots` remaining spots of an event (setup included
+ *  unless it has already started). */
+export function eventWork(model, spots, started = false) {
+  const e = model.event || { a: 0, b: 35 * 1000 };
+  const n = Math.max(0, Number(spots) || 0);
+  if (!n) return 0;
+  const full = EV_SETUP + e.a + e.b * n;
+  return clamp(started ? full - EV_SETUP - Math.max(0, e.a) : full, 30 * 1000, 3 * HOUR);
+}
+
+/** Learn the model.
+ *  records: Rip-Live fulfillments [{ ts, qty, key? }]
+ *  events:  past/current events [{ id, fulfills: [{ ts, spots }] }]
+ *  Event ripping counts as on-air (not a break), and Rip-Live gaps that had an
+ *  event ripped inside them are left out of the slot-time samples, so slot time
+ *  and event time are learned separately. */
+export function learn(records, now = Date.now(), events = []) {
+  const ev = learnEvents(events, now);
   const slots = toSlots((records || []).filter((r) => r.ts >= now - LOOKBACK && r.ts <= now));
-  const runs = toRuns(slots);
+  // One activity timeline: Rip-Live slots + event spot fulfills (runs = on air).
+  const evActs = [];
+  for (const e of (events || [])) for (const f of (e.fulfills || [])) {
+    if (Number.isFinite(f.ts) && f.ts <= now && f.ts >= now - LOOKBACK) evActs.push({ ts: f.ts, qty: 0, ev: true });
+  }
+  const acts = [...slots, ...evActs].sort((x, y) => x.ts - y.ts);
+  const runs = toRuns(acts);
+  const overlapsEvent = (t0, t1) => ev.windows.some((w) => w.start < t1 && w.end > t0);
   const samples = { wk: [], fri: [] };
   for (const r of runs) {
-    for (let i = 1; i < r.slots.length; i++) {
-      const gap = r.slots[i].ts - r.slots[i - 1].ts;
-      if (gap > 0 && gap <= MAX_SAMPLE) samples[r.type].push({ gap, qty: r.slots[i].qty });
+    let prev = null;
+    for (const s of r.slots) {
+      if (s.ev) continue;
+      if (prev) {
+        const gap = s.ts - prev.ts;
+        if (gap > 0 && gap <= MAX_SAMPLE && !overlapsEvent(prev.ts, s.ts)) samples[r.type].push({ gap, qty: s.qty });
+      }
+      prev = s;
     }
   }
-  // Day schedule + break factor, per stream day.
+  // Day schedule, break factor and event load, per stream day.
   const days = new Map();
   for (const r of runs) {
     const k = r.type + ':' + r.mid;
-    const d = days.get(k) || { type: r.type, mid: r.mid, first: r.start, last: r.end, active: 0, n: 0 };
+    const d = days.get(k) || { type: r.type, mid: r.mid, first: r.start, last: r.end, active: 0, n: 0, evMs: 0 };
     d.first = Math.min(d.first, r.start); d.last = Math.max(d.last, r.end);
-    d.active += r.end - r.start; d.n += r.slots.length;
+    d.active += r.end - r.start; d.n += r.slots.filter((x) => !x.ev).length;
     days.set(k, d);
+  }
+  for (const w of ev.windows) {
+    const sd = streamDay(w.end);
+    const d = sd.type && days.get(sd.type + ':' + sd.mid);
+    if (d) d.evMs += w.end - w.start;
   }
   const all = [...samples.wk, ...samples.fri];
   const allFit = fitTimes(all, DEFAULTS.wk);
-  const model = { builtAt: now, samples: all.length, types: {} };
+  const model = { builtAt: now, samples: all.length, event: { a: ev.a, b: ev.b, samples: ev.samples }, types: {} };
   for (const t of ['wk', 'fri']) {
     const ds = [...days.values()].filter((d) => d.type === t && d.n >= 5);
     const fit = samples[t].length >= 25 ? fitTimes(samples[t], allFit) : allFit;
@@ -144,12 +213,17 @@ export function learn(records, now = Date.now()) {
     const ends = ds.map((d) => (d.last - d.mid) / MIN);
     const bfs = ds.filter((d) => d.last - d.first > HOUR && d.active > 0)
       .map((d) => clamp((d.last - d.first) / d.active, 1, 3));
+    // Event time per minute of Rip-Live time on a typical day (for events not
+    // on the board yet).
+    const shares = ds.filter((d) => d.active > HOUR)
+      .map((d) => clamp(d.evMs / Math.max(30 * MIN, d.active - d.evMs), 0, 1.5));
     model.types[t] = {
       base: fit.base,
       per: fit.per,
       start: starts.length >= 2 ? median(starts) : DEFAULTS[t].start,   // minutes after midnight
       end: ends.length >= 2 ? median(ends) : DEFAULTS[t].end,
       bf: bfs.length >= 2 ? median(bfs) : DEFAULTS[t].bf,
+      evShare: shares.length >= 3 ? median(shares) : 0.2,
       days: ds.length,
       samples: samples[t].length,
     };
@@ -160,19 +234,26 @@ export function learn(records, now = Date.now()) {
 // ── Estimating ────────────────────────────────────────────────────────────
 function slotTime(m, qty) { return m.base + m.per * Math.max(0, (Number(qty) || 1) - 1); }
 
-/** Today's pace vs the model, from the current on-air run (1 = normal). */
-export function paceFactor(model, recentRecords, now = Date.now()) {
+/** Today's pace vs the model, from the current on-air run (1 = normal).
+ *  eventTimes: recent event spot fulfill timestamps — Rip-Live gaps with an event
+ *  ripped inside them are skipped, so an event never reads as "slow" slots. */
+export function paceFactor(model, recentRecords, now = Date.now(), eventTimes = []) {
   const slots = toSlots((recentRecords || []).filter((r) => r.ts <= now && r.ts >= now - 12 * HOUR));
-  const runs = toRuns(slots);
+  const evs = (eventTimes || []).filter((t) => t <= now && t >= now - 12 * HOUR);
+  const acts = [...slots, ...evs.map((ts) => ({ ts, qty: 0, ev: true }))].sort((x, y) => x.ts - y.ts);
+  const runs = toRuns(acts);
   const run = runs[runs.length - 1];
-  if (!run || now - run.end > BREAK_GAP || run.slots.length < 3) return 1;
+  if (!run || now - run.end > BREAK_GAP) return 1;
   const m = model.types[run.type];
   let actual = 0, predicted = 0, n = 0;
-  for (let i = run.slots.length - 1; i >= 1 && n < 12; i--, n++) {
-    actual += run.slots[i].ts - run.slots[i - 1].ts;
-    predicted += slotTime(m, run.slots[i].qty);
+  for (let i = run.slots.length - 1; i >= 1 && n < 12; i--) {
+    const cur = run.slots[i], prev = run.slots[i - 1];
+    if (cur.ev || prev.ev) continue;               // event in between → not a clean slot time
+    actual += cur.ts - prev.ts;
+    predicted += slotTime(m, cur.qty);
+    n++;
   }
-  if (!predicted) return 1;
+  if (n < 3 || !predicted) return 1;
   const raw = clamp(actual / predicted, 0.6, 1.8);
   return 1 + (raw - 1) * Math.min(1, n / 12);
 }
@@ -205,45 +286,61 @@ export function liveStatus(model, lastActivity, now = Date.now()) {
 /**
  * Estimate when each queued slot reaches the top.
  * slots: [{ key, qty, reachedTopAt }] in queue order.
- * ctx: { now, lastActivity, pace }
- * Returns { status, byKey: { key: { mid, lo, hi } }, clearAt: { mid, lo, hi } } (ms timestamps).
+ * ctx: { now, lastActivity, pace, due }
+ *   due: events expected to be ripped before the queue moves on —
+ *        [{ work (ms), front: bool }] — front = on the overlay right now (ripped
+ *        before the top slot); otherwise ripped right after the current top slot.
+ * Returns { status, byKey: { key: { mid, lo, hi } }, clearAt } (ms timestamps).
  */
 export function estimate(model, slots, ctx = {}) {
   const now = ctx.now || Date.now();
   const status = liveStatus(model, ctx.lastActivity, now);
   const pace = clamp(Number(ctx.pace) || 1, 0.6, 1.8);
+  const due = (ctx.due || []).filter((d) => d && d.work > 0);
+  const front = due.filter((d) => d.front);
+  const after = due.filter((d) => !d.front);
   const sim = (paceMul, useBreaks) => {
     const out = [];
     let w = windowAt(model, now);
     if (!w) return out;
-    // Where the clock starts: now if on air (or inside today's window, on a break);
-    // otherwise the next stream start.
     let cursor = (status === 'live') ? now : Math.max(now, w.start);
-    if (status === 'live' && now >= w.end) w = { ...w, end: now + 30 * MIN }; // running late: give it overtime
-    let work = 0;
-    slots.forEach((s, i) => {
-      out.push(cursor);
-      const t = model.types[w.type];
-      let svc = slotTime(t, s.qty) * pace * paceMul;
-      if (i === 0 && status === 'live') {
-        const since = Math.max(s.reachedTopAt || 0, ctx.lastActivity || 0);
-        if (since) svc = Math.max(svc * 0.25, svc - (now - since));
-      }
-      work += svc;
-      // Breaks: short waits rarely hit one, long waits usually do.
-      const g = useBreaks ? 1 + (t.bf - 1) * Math.min(1, work / (3 * HOUR)) : 1;
-      let step = svc * g;
-      // Roll past the end of the stream day into the next stream window.
+    if (status === 'live' && now >= w.end) w = { ...w, end: now + 30 * MIN }; // running late: overtime
+    // Advance the clock by `step`, rolling past stream ends into the next window.
+    const advance = (step) => {
       while (cursor + step > w.end) {
-        const used = Math.max(0, w.end - cursor);
-        step -= used;
+        step -= Math.max(0, w.end - cursor);
         const next = windowAt(model, w.end + MIN);
         if (!next) break;
         w = next;
         cursor = w.start;
       }
       cursor += step;
+    };
+    let work = 0;        // Rip-Live work so far
+    let known = 0;       // event time already placed (due events)
+    let allowed = 0;     // event allowance already added
+    for (const d of front) { known += d.work; advance(d.work * paceMul); }
+    slots.forEach((s, i) => {
+      out.push(cursor);
+      const t = model.types[w.type];
+      let svc = slotTime(t, s.qty) * pace * paceMul;
+      if (i === 0 && status === 'live' && !front.length) {
+        const since = Math.max(s.reachedTopAt || 0, ctx.lastActivity || 0);
+        if (since) svc = Math.max(svc * 0.25, svc - (now - since));
+      }
+      work += svc;
+      const ramp = Math.min(1, work / (3 * HOUR)); // short waits rarely hit a break / surprise event
+      const g = useBreaks ? 1 + (t.bf - 1) * ramp : 1;
+      let step = svc * g;
+      // Events not on the board yet: typical event load, minus due events already counted.
+      if (useBreaks) {
+        const want = (t.evShare || 0) * work * ramp - known;
+        if (want > allowed) { step += want - allowed; allowed = want; }
+      }
+      advance(step);
+      if (i === 0) for (const d of after) { known += d.work; advance(d.work * paceMul); }
     });
+    if (!slots.length) for (const d of after) advance(d.work * paceMul);
     out.push(cursor); // time the whole queue clears
     return out;
   };
@@ -280,4 +377,26 @@ export function etaLabel(e, now = Date.now()) {
   if (pm.ymd === laParts(now + DAY).ymd) return `tomorrow ~${t}`;
   const wd = new Date(e.mid).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
   return `${wd} ~${t}`;
+}
+
+/** Conservative single-number label for viewers (overlay / public page): a point
+ *  a quarter of the way from the estimate toward its upper end, rounded UP to the
+ *  next 5 minutes (next 15 for waits past 2 h; clock times rounded up to :15). */
+export function publicLabel(e, now = Date.now(), isTop = false) {
+  if (!e) return '';
+  if (isTop) return 'up now';
+  const t = e.mid + 0.25 * Math.max(0, e.hi - e.mid);
+  const mins = (t - now) / MIN;
+  if (mins <= 5) return 'up next';
+  const sameDay = laParts(t).ymd === laParts(now).ymd;
+  if (sameDay && mins <= 180) {
+    const m = mins <= 120 ? Math.ceil(mins / 5) * 5 : Math.ceil(mins / 15) * 15;
+    return m < 60 ? `~${m} min` : `~${Math.floor(m / 60)}h${m % 60 ? ' ' + (m % 60) + 'm' : ''}`;
+  }
+  const q = Math.ceil(t / (15 * MIN)) * 15 * MIN;
+  const clock = new Date(q).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).replace(':00', '');
+  if (laParts(q).ymd === laParts(now).ymd) return `today ~${clock}`;
+  if (laParts(q).ymd === laParts(now + DAY).ymd) return `tomorrow ~${clock}`;
+  const wd = new Date(q).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
+  return `${wd} ~${clock}`;
 }

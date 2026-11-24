@@ -39,6 +39,10 @@
 <main>
   <p class="sub">Fulfilled orders archived by day (resets at 12:00 AM PST). Each row is one day — download its full fulfilled-orders list as a spreadsheet. Unfulfilled orders stay on the live queue.</p>
   <div id="list"><div class="empty">Loading…</div></div>
+  <p class="sub" style="margin-top:22px">⏱ <b>Wait-time (ETA) data</b> — everything the queue estimates learn from, for deeper analysis:
+    <a href="/api/eta/data?file=timing">fulfillment timing log</a> ·
+    <a href="/api/eta/data?file=snapshots">per-minute queue snapshots</a> ·
+    <a href="/api/eta/data?file=accuracy">estimate accuracy</a></p>
 </main>
 <script>
   function money(n){return '$'+Number(n||0).toFixed(2);}
