@@ -93,6 +93,7 @@
   .src.MIX{background:rgba(255,255,255,.14);color:#dfe4ee}
   .star{color:var(--pri);flex:none;font-size:14px}
   .prep{color:var(--done);flex:none;font-size:14px}
+  .eta{flex:none;font-size:13px;font-weight:800;color:#cfe0ff;white-space:nowrap;text-shadow:var(--txt-outline);font-variant-numeric:tabular-nums}
   .more{padding:6px 12px 2px;font-size:13px;color:var(--muted);font-weight:600}
   .empty{padding:26px 18px;text-align:center;color:var(--muted);font-size:15px}
   .off{padding:22px 18px;text-align:center;color:var(--muted);font-size:15px}
@@ -287,6 +288,7 @@
         ${e.isPriority?'<span class="star">★</span>':''}
         ${e.prepped?'<span class="prep" title="prepped">✓</span>':''}
         ${e.source?`<span class="src ${esc(e.source)}">${esc(e.source)}</span>`:''}
+        ${e.eta?`<span class="eta">${esc(e.eta)}</span>`:''}
       </div>`;
   }
 
@@ -316,7 +318,7 @@
   let reelRAF = null;
   let reelLastTs = 0;
 
-  function queueSig(q){ return q.map(e=>e.key+':'+e.position+':'+(e.prepped?1:0)+':'+(e.isPriority?1:0)+':'+e.buyer).join('|'); }
+  function queueSig(q){ return q.map(e=>e.key+':'+e.position+':'+(e.prepped?1:0)+':'+(e.isPriority?1:0)+':'+e.buyer+':'+(e.eta||'')).join('|'); }
 
   function renderReel(items, rowFn, sigFn){
     rowFn = rowFn || rowHtml;

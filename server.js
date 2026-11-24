@@ -17,6 +17,7 @@ import { Server as IOServer } from 'socket.io';
 import { authenticator } from 'otplib';
 
 import { QueueEngine } from './queue.js';
+import { laMidnight } from './eta.js';
 import { tiktokEnabled, mountAuth, startPolling, tiktokBoot, tiktokStatus, tiktokTokensForEnv, debugShops, refetchShopCipher, debugRawOrder, debugCancellations } from './tiktok.js';
 import { shopifyEnabled, startShopifyPolling, shopifyStatus, debugRawOrder as shopifyDebugRawOrder, shopifyScopeCheck, eventSyncCandidates, fetchOrderShipping, auditVaultOrders, fetchVaultCatalog } from './shopify.js';
 import { startDiscord, discordEnabled } from './discord.js';
@@ -194,6 +195,7 @@ function publicView() {
 // showing that event. Perpetual (iPoke) queues are always "live".
 function overlayView() {
   const snap = queue.snapshot();
+  const showEta = !!(snap.overlays && snap.overlays.queue && snap.overlays.queue.showEta);
   const live = snap.perpetual || snap.stats.live;
   const active = snap.activeEvent; // full event queue object, or null
   return {
@@ -229,6 +231,8 @@ function overlayView() {
       ? snap.queue.map((e) => ({
           position: e.position, buyer: e.buyer, isPriority: e.isPriority,
           prepped: !!e.prepped, source: e.sourceShort || '',
+          // Estimated wait — only when the admin has turned "Show ETA" on.
+          ...(showEta && snap.eta && snap.eta.byKey[e.key] ? { eta: snap.eta.byKey[e.key].label } : {}),
         }))
       : [],
     stats: {
@@ -446,6 +450,22 @@ app.post('/api/events/:id/rip', requireAuth, (req, res) => res.json({ ok: queue.
 // close go to the main queue.
 app.post('/api/events/:id/close', requireAuth, (req, res) => res.json({ ok: queue.closeEvent(req.params.id) }));
 app.post('/api/events/:id/reopen', requireAuth, (req, res) => res.json({ ok: queue.reopenEvent(req.params.id) }));
+// Schedule a WTA to close automatically: { minutes } from now, or { time: "HH:MM" }
+// Pacific (today, or tomorrow if that time has passed), or { clear: true }.
+app.post('/api/events/:id/autoclose', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const now = Date.now();
+  let at = null;
+  if (b.clear) at = null;
+  else if (b.minutes != null && Number(b.minutes) > 0) at = now + Math.round(Number(b.minutes) * 60000);
+  else if (typeof b.time === 'string' && /^\d{1,2}:\d{2}$/.test(b.time.trim())) {
+    const [h, m] = b.time.trim().split(':').map(Number);
+    if (h > 23 || m > 59) return res.status(400).json({ ok: false, error: 'bad time' });
+    at = laMidnight(now) + (h * 60 + m) * 60000;
+    if (at <= now) at = laMidnight(laMidnight(now) + 36 * 3600000) + (h * 60 + m) * 60000; // already passed → tomorrow
+  } else return res.status(400).json({ ok: false, error: 'give minutes or a HH:MM time' });
+  res.json({ ok: queue.setEventAutoClose(req.params.id, at), closesAt: at });
+});
 // Set/clear an event's admin win-note (who won / what they won) → { note }.
 app.post('/api/events/:id/note', requireAuth, (req, res) => res.json({ ok: queue.setEventNote(req.params.id, (req.body && req.body.note) || '') }));
 // Set/clear an event's internal Event Note (items used, etc.) → { note }.
@@ -804,6 +824,9 @@ function sendCsv(res, filename, records, cancelled = [], unfulfilled = []) {
   // UTF-8 instead of mangling them into mojibake (PokÃ©mon, â€").
   res.send('﻿' + toCsv(records, cancelled, unfulfilled));
 }
+// Wait-time estimates (admin): status, model and per-slot ETAs.
+app.get('/api/eta', requireAuth, (_req, res) => res.json(queue.etaSnapshot(queue.activeQueue()) || { ok: false }));
+
 // Past-stream summaries for the history page.
 app.get('/api/history', requireAuth, (_req, res) => res.json({ history: queue.snapshot().history }));
 // Current stream's orders (fulfilled + cancelled).
@@ -896,9 +919,19 @@ if (queue.perpetual) {
   // Also count any off-top vault orders that have stayed fulfilled past the grace
   // window (see queue.sweepFulfilledVaults). Same once-a-minute cadence.
   queue.sweepFulfilledVaults?.();
+  try { queue.captureTiming?.(); } catch (e) { console.warn('[eta] capture failed:', e.message); }
   const rolloverTimer = setInterval(() => {
+    // Log fulfillment timing BEFORE a rollover moves the day into Past Days.
+    try { queue.captureTiming?.(); } catch (e) { console.warn('[eta] capture failed:', e.message); }
     queue.maybeDailyRollover();
     queue.sweepFulfilledVaults?.();
+    try { queue.checkAutoClose?.(); } catch (e) { console.warn('[wta] auto-close check failed:', e.message); }
+    // Wait estimates count down with the clock — refresh the admin (and the
+    // overlay, if its ETA is on) once a minute even when nothing else changed.
+    try {
+      panelNs.emit('state', queue.snapshot());
+      if (queue.overlays && queue.overlays.queue && queue.overlays.queue.showEta) overlayNs.emit('state', overlayView());
+    } catch (e) { /* display refresh only */ }
   }, 60 * 1000);
   rolloverTimer.unref?.();
 }

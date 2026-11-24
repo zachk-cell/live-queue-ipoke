@@ -101,7 +101,9 @@
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
   .eclosedtag{background:#3a2a10;color:#ffcf87;border:1px solid #6b4d16;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:6px}
   .ewtaclose{background:#2a1d0c;border:1px solid #6b4d16;color:#ffcf87}
+  .eautotag{background:#13243a;color:#9ec2ff;border-color:#2a4a72}
   .ewtaclose.on{background:#10291c;border-color:#1f6b44;color:#8fe3b5}
+  .etab{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:6px;background:#17233a;border:1px solid #2a3c5e;color:#9ec2ff;font-size:11px;font-weight:700;white-space:nowrap;vertical-align:middle}
   .badge.samename{background:#4a2c00;color:#ffcf87;border:1px solid var(--pri)}
   .badge.hold{background:var(--pri);color:#2a1e00;animation:pulse 1.3s ease-in-out infinite}
   /* Failsafe: an event product that landed in the Rip-Live queue without matching an event. */
@@ -547,6 +549,7 @@
     <div class="stat"><b id="s-done">0</b><span>Fulfilled</span></div>
     <div class="stat"><b id="s-avgq">—</b><span>Avg in queue</span></div>
     <div class="stat"><b id="s-avgt">—</b><span>Avg at top</span></div>
+    <div class="stat" id="s-eta-box" title="Estimated wait"><b id="s-eta">—</b><span id="s-eta-lbl">Queue clears</span></div>
   </div>
 </header>
 
@@ -673,6 +676,7 @@
       <input id="ov-queue-speed" type="range" min="4" max="120" step="1" value="26" />
       <div class="ov-hint">Only affects the reel overlay (the “reel ↗” link). Higher = faster roll.</div>
       <label class="ov-check"><input id="ov-queue-panel" type="checkbox" checked /> Show background &amp; border</label>
+      <label class="ov-check" title="Shows each person's estimated wait next to their name on the live overlay (viewers can see this)"><input id="ov-queue-eta" type="checkbox" /> Show estimated wait (ETA) on the overlay</label>
     </div>
 
     <div class="ov-sec">
@@ -738,6 +742,24 @@
     <div class="row">
       <button class="ghost" onclick="closeEvent()">Cancel</button>
       <button class="primary" onclick="saveEvent()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- iPoke: WTA auto-close modal -->
+<div class="modal" id="wtaAcModal">
+  <div class="card">
+    <h3 id="wac-title">Auto-close WTA</h3>
+    <p>The WTA closes by itself at this time. Orders placed after it go to the main queue, exactly like clicking 🔒 Close WTA.</p>
+    <div class="two">
+      <div><label>Close after (minutes from now)</label><input type="number" id="wac-min" min="1" step="1" placeholder="e.g. 90" /></div>
+      <div><label>…or close at (Pacific time)</label><input type="time" id="wac-time" /></div>
+    </div>
+    <div id="wac-cur" style="color:#9aa3b5;font-size:12.5px;margin-top:6px"></div>
+    <div class="row">
+      <button class="ghost" id="wac-clear" onclick="saveWtaAutoClose(true)">Remove auto-close</button>
+      <button class="ghost" onclick="closeWtaAutoClose()">Cancel</button>
+      <button class="primary" onclick="saveWtaAutoClose(false)">Save</button>
     </div>
   </div>
 </div>
@@ -1896,6 +1918,37 @@
       if(qEl.children[idx] !== node) qEl.insertBefore(node, qEl.children[idx] || null);
     });
     for(const [key,node] of slotNodes){ if(!seen.has(key)){ node.remove(); slotNodes.delete(key); expandedKeys.delete(key); } }
+    paintEta();
+  }
+  // Estimated wait on each slot + the "Queue clears" stat. Painted separately so
+  // the once-a-minute refresh never rebuilds the rows.
+  function paintEta(){
+    const eta = state.eta;
+    const by = (eta && eta.byKey) || {};
+    for(const [key,node] of slotNodes){
+      const nm = node.querySelector('.who .name'); if(!nm) continue;
+      let sp = nm.querySelector('.etab');
+      const e = by[key];
+      if(!e){ if(sp) sp.remove(); continue; }
+      if(!sp){ sp = document.createElement('span'); sp.className='etab'; nm.insertBefore(sp, nm.querySelector('.nm-hint')); }
+      const txt = '⏱ ' + e.label;
+      if(sp.textContent !== txt) sp.textContent = txt;
+      sp.title = 'Estimated time until this slot reaches the top. Range '
+        + new Date(e.lo).toLocaleString('en-US',{timeZone:'America/Los_Angeles',weekday:'short',hour:'numeric',minute:'2-digit'}) + ' – '
+        + new Date(e.hi).toLocaleString('en-US',{timeZone:'America/Los_Angeles',weekday:'short',hour:'numeric',minute:'2-digit'}) + ' PT';
+    }
+    const v = document.getElementById('s-eta'), l = document.getElementById('s-eta-lbl'), box = document.getElementById('s-eta-box');
+    if(!v) return;
+    if(!eta){ v.textContent='—'; return; }
+    v.textContent = eta.clearAt ? eta.clearAt.label : '—';
+    l.textContent = 'Queue clears · ' + (eta.status==='live' ? 'on air' : eta.status==='break' ? 'on a break' : 'off air');
+    const m = eta.model || {};
+    box.title = 'Wait estimates (internal)\n'
+      + 'Status: ' + (eta.status==='live'?'on air':eta.status==='break'?'break (inside stream hours, nothing fulfilled for 30+ min)':'off air — clock starts at the next stream') + '\n'
+      + 'Profile: ' + (m.profile||'') + ' · usual stream ' + (m.usualStart||'?') + '–' + (m.usualEnd||'?') + ' PT\n'
+      + '1-item slot ≈ ' + (m.slotMin||'?') + ' min, +' + (m.perItemSec||'?') + ' s per extra item\n'
+      + "Today's pace: " + (eta.pace||1) + '× · breaks add up to ' + Math.round(((m.breakFactor||1)-1)*100) + '% on long waits\n'
+      + 'Learned from ' + (m.samples||0) + ' slot timings · ' + (m.logged||0) + ' fulfillments logged';
   }
 
   // Per-variant counter card. Rebuild the structure only when the variant
@@ -2966,6 +3019,34 @@
       confirmText:'Close WTA', danger:false});
     if(ok) await postJSON('/api/events/'+encodeURIComponent(id)+'/close');
   }
+  let wacEventId = null;
+  function openWtaAutoClose(id){
+    const ev=(state.events||[]).find(e=>e.id===id); if(!ev) return;
+    wacEventId = id;
+    document.getElementById('wac-title').textContent = 'Auto-close: '+(ev.title||'WTA');
+    document.getElementById('wac-min').value='';
+    document.getElementById('wac-time').value='';
+    document.getElementById('wac-cur').textContent = ev.closesAt ? ('Currently set to close at '+fmtPST(ev.closesAt)+' PT.') : 'No auto-close set.';
+    document.getElementById('wac-clear').style.display = ev.closesAt ? '' : 'none';
+    document.getElementById('wtaAcModal').classList.add('open');
+  }
+  function closeWtaAutoClose(){ document.getElementById('wtaAcModal').classList.remove('open'); wacEventId=null; }
+  async function saveWtaAutoClose(clear){
+    if(!wacEventId) return;
+    let body;
+    if(clear) body = { clear:true };
+    else {
+      const mins = Number(document.getElementById('wac-min').value);
+      const tm = document.getElementById('wac-time').value;
+      if(mins>0) body = { minutes: mins };
+      else if(tm) body = { time: tm };
+      else { alert('Enter how many minutes from now, or a Pacific time to close at.'); return; }
+    }
+    const r = await postJSON('/api/events/'+encodeURIComponent(wacEventId)+'/autoclose', body);
+    const j = await r.json().catch(()=>({}));
+    if(!j.ok){ alert("Couldn't set the auto-close — the WTA may already be closed."); return; }
+    closeWtaAutoClose();
+  }
   async function reopenWtaUI(id){
     const ev=(state.events||[]).find(e=>e.id===id);
     const ok = await uiConfirm({title:'Reopen "'+((ev&&ev.title)||'WTA')+'"?',
@@ -3074,7 +3155,7 @@
     if(!state.perpetual){ return; }
     const box = document.getElementById('events-admin');
     const evs = state.events||[];
-    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,e.openEnded?1:0,e.closedAt||0,
+    const sig = JSON.stringify([eventsCollapsed?1:0, evs.map(e=>[e.id,e.type,e.title,e.description,e.totalSpots,e.spotsOrdered,e.spotsRemaining,e.soldOut,e.oversold,e.oversoldSpots,e.status,e.active,e.openEnded?1:0,e.closedAt||0,e.closesAt||0,
       e.unfulfilledCount,e.entryCount,
       (e.keywords||[]).join(','), (e.note||''), (e.eventNote||''), expandedEvents.has(e.id)?1:0,
       expandedEvents.has(e.id)?(e.entries||[]).map(x=>x.id+x.position+x.buyer+x.spots+(x.fulfilled?'F':'')+(x.winner?'W':'')+(x.oversold?'O'+(x.oversoldSpotsInEntry||0)+(x.oversoldPartial?'p':''):'')).join('|'):''])]);
@@ -3122,6 +3203,7 @@
           <span class="ename">${esc(e.title)}</span>
           ${e.oversold?`<span class="oversoldtag" title="More spots ordered than this event's limit">⚠ OVERSOLD +${e.oversoldSpots}</span>`:''}
           ${e.active?'<span class="eactive">● ON OVERLAY</span>':''}
+          ${(!closed && !ripped && e.closesAt)?`<span class="eclosedtag eautotag" title="Closes automatically — orders placed after this go to the main queue">⏰ closes ${esc(fmtPST(e.closesAt))}</span>`:''}
           ${closed?`<span class="eclosedtag" title="Closed — not taking new entries; orders placed after ${esc(fmtPST(e.closedAt))} go to the main queue">🔒 CLOSED ${esc(fmtPST(e.closedAt))}</span>`:''}
           ${ripped?`<span class="estat" title="Event marked fulfilled (PST)">(ripped${e.rippedAt?' '+esc(fmtPST(e.rippedAt)):''})</span>`:''}
           <div class="ebtns">
@@ -3129,7 +3211,7 @@
             <button class="etoggle ${e.active?'on':''}" onclick="toggleEventActive('${e.id}',${e.active?'false':'true'})">${e.active?'On overlay ✓':'Show on overlay'}</button>
             ${(e.type==='wta' && !ripped) ? (closed
               ? `<button class="ewtaclose on" onclick="reopenWtaUI('${e.id}')" title="Start taking entries again (orders that went to the main queue since closing are pulled back in)">🔓 Reopen WTA</button>`
-              : `<button class="ewtaclose" onclick="closeWtaUI('${e.id}')" title="Stop taking entries — anything ordered after this goes to the main queue">🔒 Close WTA</button>`) : ''}
+              : `<button class="ewtaclose" onclick="closeWtaUI('${e.id}')" title="Stop taking entries — anything ordered after this goes to the main queue">🔒 Close WTA</button><button class="ewtaclose${e.closesAt?' on':''}" onclick="openWtaAutoClose('${e.id}')" title="Close this WTA automatically after a set time, or at a set Pacific time">⏰ ${e.closesAt?'Auto-close ✓':'Auto-close'}</button>`) : ''}
             <button class="erip" onclick="ripEventUI('${e.id}')" ${ripped?'disabled style=\"opacity:.4\"':''}>${ripped?'Fulfilled ✓':'Event Fulfilled'}</button>
             <button class="enote ${e.note?'on':''}" onclick="editEventNote('${e.id}')" title="Winner Note — who won and what they won. Saved to Past Events when archived.">📝 ${e.note?'Winner ✓':'Winner Note'}</button>
             <button class="enote enote2 ${e.eventNote?'on':''}" onclick="editEventItemsNote('${e.id}')" title="Event Note (internal) — what specific items are being used for this event. Saved to Past Events when archived.">🎟 ${e.eventNote?'Event ✓':'Event Note'}</button>
@@ -3269,6 +3351,8 @@
       if(sc && document.activeElement !== sc){ sc.value = Math.round(scale*100); document.getElementById('ov-'+k+'-scaleVal').textContent = Math.round(scale*100)+'%'; }
       if(tr && document.activeElement !== tr){ tr.value = op; document.getElementById('ov-'+k+'-opVal').textContent = op+'%'; }
       if(cb){ cb.checked = panel; }
+      const etaCb = document.getElementById('ov-'+k+'-eta');
+      if(etaCb){ etaCb.checked = !!s.showEta; }
       const sp = document.getElementById('ov-'+k+'-speed');
       if(sp && document.activeElement !== sp){ const spv = s.speed!=null?Math.round(Number(s.speed)):26; sp.value = spv; document.getElementById('ov-'+k+'-speedVal').textContent = spv+' px/s'; }
       // Custom colors (vault). Shown only when the server has a custom color set.
@@ -3297,6 +3381,8 @@
     const opacity = Number(document.getElementById('ov-'+k+'-op').value)/100;
     const panel = document.getElementById('ov-'+k+'-panel').checked;
     const patch = { which: k, scale, opacity, panel };
+    const etaEl = document.getElementById('ov-'+k+'-eta');
+    if(etaEl) patch.showEta = etaEl.checked;
     const spEl = document.getElementById('ov-'+k+'-speed');
     if(spEl) patch.speed = Number(spEl.value);
     const ccb = document.getElementById('ov-'+k+'-customcolors');
@@ -3321,6 +3407,8 @@
       sc.addEventListener('input', () => { document.getElementById('ov-'+k+'-scaleVal').textContent = sc.value+'%'; pushOverlay(k); });
       tr.addEventListener('input', () => { document.getElementById('ov-'+k+'-opVal').textContent = tr.value+'%'; pushOverlay(k); });
       cb.addEventListener('change', () => pushOverlay(k));
+      const etaCb = document.getElementById('ov-'+k+'-eta');
+      if(etaCb) etaCb.addEventListener('change', () => pushOverlay(k));
       const sp = document.getElementById('ov-'+k+'-speed');
       if(sp) sp.addEventListener('input', () => { document.getElementById('ov-'+k+'-speedVal').textContent = sp.value+' px/s'; pushOverlay(k); });
       const ccb = document.getElementById('ov-'+k+'-customcolors');

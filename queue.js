@@ -15,11 +15,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import * as ETA from './eta.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STATE_FILE = path.join(DATA_DIR, 'queue-state.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const TIMING_FILE = path.join(DATA_DIR, 'timing-log.json'); // iPoke: durable fulfillment timing log (ETA model)
+const TIMING_KEEP_MS = 180 * 24 * 60 * 60 * 1000;            // keep 180 days of timing data
 const EVENTS_FILE = path.join(DATA_DIR, 'events-state.json'); // iPoke: event entries (side-queues)
 const SEALED_FILE = path.join(DATA_DIR, 'sealed-state.json'); // iPoke: Ship-Sealed side-queue (internal pack/ship)
 const PAST_EVENTS_FILE = path.join(DATA_DIR, 'past-events.json'); // iPoke: archived (finished) events
@@ -98,6 +101,13 @@ export class QueueEngine extends EventEmitter {
     // whether/when/how (top vs grace) it was actually counted. Persists in its own
     // file so it survives fulfillment, the nightly rollover and restarts, making the
     // vault counter fully reconcilable (and manual corrections unnecessary).
+    // Durable fulfillment timing log for the ETA model — outlives Past Days (30).
+    // [{ id, kind:'main'|'event', ts (fulfilledAt), qty, key?, top?, placed?, manual?, eventId? }]
+    this.timingLog = [];
+    this._timingIds = new Set();
+    this._etaModel = null;
+    this._etaModelAt = 0;
+    this._etaModelN = -1;
     this.vaultLedger = {}; // { [orderId]: { orderId, orderName, buyer, source, items, vaults, expected, counted, countedAt, path, status, firstSeenAt, lastSeenAt } }
     this.live = false; // when false, incoming orders are ignored (not queued)
     this.sessionStartedAt = null; // when the current live started
@@ -167,7 +177,7 @@ export class QueueEngine extends EventEmitter {
     // the Vault (pack-count) board. opacity 0..1 (background), scale 0.5..3,
     // panel = show background + border (single toggle).
     this.overlays = {
-      queue: { opacity: 0, scale: 1, panel: true, speed: 26, textColor: '', bgColor: '' },
+      queue: { opacity: 0, scale: 1, panel: true, speed: 26, textColor: '', bgColor: '', showEta: false },
       vault: { opacity: 0, scale: 1, panel: true, speed: 26, textColor: '', bgColor: '' },
     };
     // Pacific-day marker for the daily "Past Days" rollover.
@@ -398,6 +408,14 @@ export class QueueEngine extends EventEmitter {
       }
     } catch (e) {
       console.warn('[queue] could not load history:', e.message);
+    }
+    try {
+      if (fs.existsSync(TIMING_FILE)) {
+        const tl = JSON.parse(fs.readFileSync(TIMING_FILE, 'utf8'));
+        if (Array.isArray(tl)) { this.timingLog = tl; this._timingIds = new Set(tl.map((r) => r.id)); }
+      }
+    } catch (e) {
+      console.warn('[queue] could not load timing log:', e.message);
     }
     try {
       if (fs.existsSync(STATE_FILE)) {
@@ -923,6 +941,105 @@ export class QueueEngine extends EventEmitter {
       }
     } catch (e) {
       console.warn('[queue] persist failed:', e.message);
+    }
+  }
+
+  // ── ETA: timing log + estimates ──────────────────────────────────────────
+  /** Record every fulfillment (Rip-Live slots, manual adds and event spots) in
+   *  the durable timing log — when it was placed, when it hit the top, when it
+   *  was fulfilled and how big it was. Seeds from Past Days on first run.
+   *  Idempotent (keyed by order / entry id). Returns how many were added. */
+  captureTiming() {
+    let added = 0;
+    const push = (r) => {
+      if (!r || !r.id || !Number.isFinite(r.ts) || this._timingIds.has(r.id)) return;
+      this._timingIds.add(r.id); this.timingLog.push(r); added++;
+    };
+    const qtyOf = (items) => (items || []).reduce((n, i) => n + (Number(i && i.qty) || 1), 0) || 1;
+    for (const day of (this.history || [])) {
+      for (const f of (day.fulfilled || [])) {
+        if (f && f.fulfilledAt) push({ id: 'o:' + f.orderId, kind: 'main', ts: Number(f.fulfilledAt), qty: qtyOf(f.items) });
+      }
+    }
+    for (const o of this.orders.values()) {
+      if (o.status !== 'fulfilled' || !o.fulfilledAt) continue;
+      push({
+        id: 'o:' + o.id, kind: 'main', ts: Number(o.fulfilledAt), qty: qtyOf(o.items), key: o.batchKey || null,
+        top: o.reachedTopAt || null, placed: o.createdAt || null, ...(o.manual ? { manual: true } : {}),
+      });
+    }
+    for (const e of this.eventEntries.values()) {
+      if (e.status !== 'fulfilled' || !e.fulfilledAt) continue;
+      push({ id: 'e:' + e.id, kind: 'event', ts: Number(e.fulfilledAt), qty: Number(e.spots) || 1, eventId: e.eventId, placed: e.createdAt || null });
+    }
+    const cutoff = Date.now() - TIMING_KEEP_MS;
+    if (added || (this.timingLog.length && this.timingLog[0].ts < cutoff)) {
+      this.timingLog = this.timingLog.filter((r) => r.ts >= cutoff).sort((a, b) => a.ts - b.ts);
+      this._timingIds = new Set(this.timingLog.map((r) => r.id));
+      try { this._atomicWrite(TIMING_FILE, JSON.stringify(this.timingLog)); }
+      catch (e) { console.warn('[queue] timing log persist failed:', e.message); }
+    }
+    return added;
+  }
+
+  /** Main-queue fulfillment records for the model: the log plus anything
+   *  fulfilled since the last capture. */
+  _etaRecords() {
+    const out = this.timingLog.filter((r) => r.kind === 'main').map((r) => ({ ts: r.ts, qty: r.qty, key: r.key || r.id }));
+    for (const o of this.orders.values()) {
+      if (o.status === 'fulfilled' && o.fulfilledAt && !this._timingIds.has('o:' + o.id)) {
+        out.push({ ts: Number(o.fulfilledAt), qty: (o.items || []).reduce((n, i) => n + (Number(i.qty) || 1), 0) || 1, key: o.batchKey || o.id });
+      }
+    }
+    return out;
+  }
+
+  /** Estimated time each queued slot reaches the top (admin), plus model info.
+   *  `queue` = activeQueue() result (passed in so snapshot doesn't rebuild it). */
+  etaSnapshot(queue, now = Date.now()) {
+    try {
+      const recs = this._etaRecords();
+      if (!this._etaModel || now - this._etaModelAt > 10 * 60 * 1000 || Math.abs(recs.length - this._etaModelN) >= 5) {
+        this._etaModel = ETA.learn(recs, now);
+        this._etaModelAt = now;
+        this._etaModelN = recs.length;
+      }
+      const model = this._etaModel;
+      let lastActivity = 0;
+      for (const r of recs) if (r.ts > lastActivity && r.ts <= now) lastActivity = r.ts;
+      for (const e of this.eventEntries.values()) if (e.fulfilledAt && e.fulfilledAt > lastActivity && e.fulfilledAt <= now) lastActivity = e.fulfilledAt;
+      const pace = ETA.paceFactor(model, recs.filter((r) => r.ts >= now - 12 * 60 * 60 * 1000), now);
+      const slots = (queue || this.activeQueue()).map((e) => ({ key: e.key, qty: e.itemCount, reachedTopAt: e.reachedTopAt }));
+      const est = ETA.estimate(model, slots, { now, lastActivity, pace });
+      const byKey = {};
+      slots.forEach((s, i) => {
+        const e = est.byKey[s.key];
+        if (!e) return;
+        const top = i === 0 && est.status !== 'off';
+        byKey[s.key] = { ...e, label: top ? (est.status === 'live' ? 'on now' : 'next up') : ETA.etaLabel(e, now) };
+      });
+      const sd = ETA.streamDay(now);
+      const t = model.types[sd.type || 'wk'];
+      const hm = (mins) => { const h = Math.floor(mins / 60) % 24, m = Math.round(mins % 60); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+      return {
+        at: now,
+        status: est.status,           // 'live' | 'break' | 'off'
+        pace: Math.round(est.pace * 100) / 100,
+        clearAt: est.clearAt ? { ...est.clearAt, label: ETA.etaLabel(est.clearAt, now) } : null,
+        byKey,
+        model: {
+          profile: sd.type === 'fri' ? 'Friday' : 'Mon–Thu',
+          slotMin: Math.round(t.base / 6000) / 10,      // minutes for a 1-item slot
+          perItemSec: Math.round(t.per / 1000),         // seconds per extra item
+          usualStart: hm(t.start), usualEnd: hm(t.end),
+          breakFactor: Math.round(t.bf * 100) / 100,
+          samples: model.samples, days: t.days,
+          logged: this.timingLog.length,
+        },
+      };
+    } catch (e) {
+      console.warn('[queue] ETA failed:', e.message);
+      return null;
     }
   }
 
@@ -2154,8 +2271,10 @@ export class QueueEngine extends EventEmitter {
   }
 
   snapshot() {
+    const queue = this.activeQueue();
     return {
-      queue: this.activeQueue(),
+      queue,
+      eta: this.etaSnapshot(queue),
       held: this.heldSlots(),
       fulfilled: this.fulfilledSlots().slice(0, 50),
       cancelled: this.cancelledSlots().slice(0, 50),
@@ -2849,6 +2968,8 @@ export class QueueEngine extends EventEmitter {
     if (patch.opacity != null && Number.isFinite(Number(patch.opacity))) s.opacity = Math.max(0, Math.min(1, Number(patch.opacity)));
     if (patch.scale != null && Number.isFinite(Number(patch.scale))) s.scale = Math.max(0.5, Math.min(3, Number(patch.scale)));
     if (patch.panel != null) s.panel = !!patch.panel;
+    // Show the estimated wait next to each name on the live (public) overlay. Off by default.
+    if (patch.showEta != null && which === 'queue') s.showEta = !!patch.showEta;
     // Reel auto-scroll speed (px/sec) — only meaningful for the queue overlay in
     // ?reel=1 mode, but stored generically so the admin slider can push it live.
     if (patch.speed != null && Number.isFinite(Number(patch.speed))) s.speed = Math.max(2, Math.min(200, Number(patch.speed)));
@@ -3021,6 +3142,9 @@ export class QueueEngine extends EventEmitter {
     if (st === 'ripped') return false;
     if (ev.openedAt && at < ev.openedAt) return false;
     if (st === 'closed') return !!ev.closedAt && at < ev.closedAt;
+    // Scheduled auto-close: exact to the second, even before the minute timer
+    // flips the status to closed.
+    if (ev.closesAt && at >= ev.closesAt) return false;
     return st === 'open';
   }
 
@@ -3501,9 +3625,40 @@ export class QueueEngine extends EventEmitter {
     if (ev.status === 'closed') return true;
     ev.status = 'closed';
     ev.closedAt = Date.now();
+    delete ev.closesAt;
     this._persist();
     this.emit('change', { reason: 'event-closed', eventId: id });
     return true;
+  }
+
+  /** Schedule (or with null, cancel) an automatic "Close WTA" at closesAt (ms). */
+  setEventAutoClose(id, closesAt) {
+    const ev = this.events.find((e) => e.id === id);
+    if (!ev || (ev.status || 'open') !== 'open') return false;
+    const t = Number(closesAt);
+    if (closesAt == null || !Number.isFinite(t) || t <= 0) delete ev.closesAt;
+    else if (t <= Date.now()) return false;
+    else ev.closesAt = Math.round(t);
+    this._persist();
+    this.emit('change', { reason: 'event-autoclose', eventId: id, closesAt: ev.closesAt || null });
+    return true;
+  }
+
+  /** Close any WTA whose scheduled close time has passed. Its closedAt is the
+   *  scheduled time, so orders placed before it still count. Runs every minute. */
+  checkAutoClose(now = Date.now()) {
+    let n = 0;
+    for (const ev of this.events) {
+      if ((ev.status || 'open') === 'open' && ev.closesAt && now >= ev.closesAt) {
+        ev.status = 'closed';
+        ev.closedAt = ev.closesAt;
+        delete ev.closesAt;
+        n++;
+        console.log(`[queue] auto-closed ${ev.title}`);
+      }
+    }
+    if (n) { this._persist(); this.emit('change', { reason: 'event-autoclosed', count: n }); }
+    return n;
   }
 
   /** Undo "Close WTA". Any orders that went to the main queue meanwhile are
@@ -3513,6 +3668,7 @@ export class QueueEngine extends EventEmitter {
     if (!ev || ev.status !== 'closed') return false;
     ev.status = 'open';
     delete ev.closedAt;
+    delete ev.closesAt;
     this._persist();
     this.emit('change', { reason: 'event-reopened', eventId: id });
     this.sweepQueuedIntoEvents();
@@ -3956,7 +4112,7 @@ export class QueueEngine extends EventEmitter {
         note: ev.note || '', noteAt: ev.noteAt || null,
         eventNote: ev.eventNote || '', eventNoteAt: ev.eventNoteAt || null,
         active: this.activeEventId === ev.id, keywords: ev.keywords,
-        openEnded: !!ev.openEnded, openedAt: ev.openedAt || null, closedAt: ev.closedAt || null,
+        openEnded: !!ev.openEnded, openedAt: ev.openedAt || null, closedAt: ev.closedAt || null, closesAt: ev.closesAt || null,
         // Full ordered side-queue (admin panel consumes this; overlay uses
         // activeEvent instead, so this stays admin-only).
         entries: q.entries,
