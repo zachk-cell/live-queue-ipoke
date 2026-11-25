@@ -33,6 +33,7 @@ const VAULT_LEDGER_FILE = path.join(DATA_DIR, 'vault-ledger.json'); // iPoke: du
 const VAULT_LEDGER_MAX = 5000; // keep the most recent N vault orders (bounded, survives rollover)
 const PRIORITY_DOLLARS = 1000; // an order (or combined batch) at/above this $ skips the queue
 const AGED_QUEUE_MS = 14 * 60 * 60 * 1000; // after this long in queue, a slot ranks ABOVE incoming priority (fairness for long waiters)
+const FLOW_ANCHOR_MAX = 60; // how many slots-above a flowing placement remembers
 const GIVEAWAY_SORT_TS = 8640000000000000; // sentinel createdAt so the giveaway seat always sorts LAST
 // House seats (Nikki + Greg) ride just BEFORE the giveaway on (Omega) quacks —
 // always the last two before it. Real/manual seats use normal (much smaller)
@@ -974,7 +975,7 @@ export class QueueEngine extends EventEmitter {
         total: Number(o.total) || 0, items: itemsOf(o.items), key: o.batchKey || null,
         top: o.reachedTopAt || null, placed: o.createdAt || null, received: o.receivedAt || null,
         source: o.source || '', ...(o.manual ? { manual: true } : {}), ...(o.hasPriority || o.manualPriority ? { priority: true } : {}),
-        ...(o.bumped ? { bumped: true } : {}), ...(o.insertPos != null || o.insertBottom ? { placedManually: true } : {}),
+        ...(o.bumped ? { bumped: true } : {}), ...(o.insertPos != null || o.insertBottom || Array.isArray(o.flowAfter) ? { placedManually: true } : {}),
         ...(o.vaultCounted ? { vault: true } : {}),
       });
     }
@@ -1768,6 +1769,12 @@ export class QueueEngine extends EventEmitter {
       // insertBottom = always-last. Both empty → flows as a regular order.
       insertPos: (first.insertPos != null ? first.insertPos : null),
       insertBottom: !!first.insertBottom,
+      // Flowing placement (seat number / drag): the keys of the slots that sat
+      // directly ABOVE this one when it was placed (nearest first). It rides right
+      // behind the nearest one still in the queue, so it moves UP as those are
+      // fulfilled and later orders line up behind it. [] = top. null = not placed.
+      flowAfter: (Array.isArray(first.flowAfter) ? first.flowAfter : null),
+      flowIdx: (first.flowIdx != null ? first.flowIdx : null),
       manual: !!first.manual,
       manualPriority: !!first.manualPriority,
       movedFromSealed: !!first.movedFromSealed,
@@ -1834,12 +1841,20 @@ export class QueueEngine extends EventEmitter {
     for (const o of this.orders.values()) {
       if (o.batchKey === batchKey && o.status === 'queued') {
         o.bumped = true;
+        // A bump means "next up" — drop any seat placement so the bump wins.
+        o.flowAfter = null; o.flowIdx = null; o.insertPos = null; o.insertBottom = false;
         found = true;
       } else if (o.bumped) {
         o.bumped = false;
       }
     }
     if (!found) return null;
+    // Slots previously placed at the very top now ride right behind the bumped one.
+    for (const o of this.orders.values()) {
+      if (o.status === 'queued' && o.batchKey !== batchKey && Array.isArray(o.flowAfter) && !o.flowAfter.length) {
+        o.flowAfter = [String(batchKey)];
+      }
+    }
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'bumped', batchKey });
@@ -1887,6 +1902,39 @@ export class QueueEngine extends EventEmitter {
     return { insertPos: null, insertBottom: false };
   }
 
+  /** Keys of the slots above index `idx` in `list` (nearest first) — the anchor
+   *  chain a flowing placement rides behind. Capped so state stays small. */
+  _flowAnchors(list, idx) {
+    return list.slice(0, Math.max(0, idx)).map((e) => String(e.key)).reverse().slice(0, FLOW_ANCHOR_MAX);
+  }
+
+  /** Place a slot at seat N / top / bottom as a FLOWING placement (not a hard lock):
+   *  it lands at that seat now, then moves up as the orders ahead of it are
+   *  fulfilled, while new orders queue behind it. Blank = regular time order. */
+  _applyFlowPlacement(batchKey, place) {
+    const key = String(batchKey);
+    const orders = [...this.orders.values()].filter((o) => o.batchKey === key && o.status === 'queued');
+    if (!orders.length) return false;
+    const regular = place.insertPos == null && !place.insertBottom;
+    let anchors = null, idx = null;
+    if (!regular) {
+      const others = this.activeQueue().filter((e) => String(e.key) !== key);
+      idx = place.insertBottom ? others.length : Math.min(Math.max(0, Math.floor(place.insertPos) - 1), others.length);
+      anchors = this._flowAnchors(others, idx);
+    }
+    const now = Date.now();
+    for (const o of orders) {
+      o.flowAfter = anchors;     // null for a regular (time-based) slot
+      o.flowIdx = idx;
+      o.insertPos = null;        // retire the hard-locked overall-position model
+      o.insertBottom = false;
+      o.pinnedPos = null;
+      o.pinnedAt = now;
+      o.bumped = false;
+    }
+    return true;
+  }
+
   addManualQueueOrder({ buyer, orderName, position, total, items } = {}) {
     const nm = String(buyer == null ? '' : buyer).trim() || 'Manual add';
     const place = this._parseManualPlacement(position);
@@ -1926,10 +1974,14 @@ export class QueueEngine extends EventEmitter {
       // for new manual adds so "position 5" actually lands at 5, not position 1.
       pinnedPos: null,
       pinnedAt: Date.now(),
-      insertPos: place.insertPos,
-      insertBottom: place.insertBottom,
+      insertPos: null,
+      insertBottom: false,
+      flowAfter: null,
+      flowIdx: null,
     };
     this.orders.set(id, order);
+    // Seat N / top / bottom → a flowing placement (moves up as the queue clears).
+    this._applyFlowPlacement(order.batchKey, place);
     this._recordVaultOrder(order); // durable vault audit ledger (observational)
     this._markTopReached();
     this._persist();
@@ -1947,13 +1999,7 @@ export class QueueEngine extends EventEmitter {
     );
     if (!orders.length) return false;
     const place = this._parseManualPlacement(position);
-    for (const o of orders) {
-      o.insertPos = place.insertPos;
-      o.insertBottom = place.insertBottom;
-      o.pinnedPos = null;      // use the overall-position model, not the old top-block
-      o.pinnedAt = Date.now();
-      o.bumped = false;
-    }
+    this._applyFlowPlacement(batchKey, place);
     this._markTopReached();
     this._persist();
     this.emit('change', { reason: 'manual-queue-position', batchKey: String(batchKey) });
@@ -2297,8 +2343,14 @@ export class QueueEngine extends EventEmitter {
     // Manual adds placed at an explicit OVERALL spot (top / bottom / position N)
     // are set aside here and spliced into the final list below — so a lone manual
     // add at "position 5" actually lands at 5, instead of being forced to the top.
-    const inserts = entries.filter((e) => e.insertPos != null || e.insertBottom);
-    const normal = entries.filter((e) => !(e.insertPos != null || e.insertBottom));
+    // Flowing placements (seat number / drag) are set aside and slotted in behind
+    // their anchor below. Legacy hard-locked spots (insertPos / insertBottom, from
+    // before flowing placement) are spliced the old way ONCE, then converted to
+    // flowing so they start moving with the queue from here on.
+    const isFlow = (e) => Array.isArray(e.flowAfter);
+    const flowing = entries.filter(isFlow);
+    const inserts = entries.filter((e) => !isFlow(e) && (e.insertPos != null || e.insertBottom));
+    const normal = entries.filter((e) => !isFlow(e) && !(e.insertPos != null || e.insertBottom));
     const pinned = normal.filter((e) => e.pinnedPos != null && !e.bumped);
     const rest = normal.filter((e) => e.pinnedPos == null || e.bumped);
     // A slot that's been waiting more than 14h ranks ABOVE incoming priority — so a
@@ -2314,19 +2366,10 @@ export class QueueEngine extends EventEmitter {
       if (a.isPriority) return a.priorityAt - b.priorityAt;        //   priority tier by time
       return a.firstOrderAt - b.firstOrderAt;                       // then normal by time
     });
-    // Pinned slots keep their relative order (lower pinnedPos first; ties by pin time)
-    // and sit as one contiguous block at the TOP, above every non-pinned slot. This
-    // is what keeps a priority order from jumping above the manually-placed ones when
-    // one of them is fulfilled — the block simply gets shorter. A later drag above an
-    // existing pin re-numbers the pins (see reorderQueueSelection), so "drag above"
-    // still works.
+    // Legacy pinned block (old top-block model) stays on top, in pin order.
     pinned.sort((a, b) => ((a.pinnedPos || 1) - (b.pinnedPos || 1)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
     const list = [...pinned, ...rest];
-    // Splice the forced-spot manual adds into the natural list. Position-N (and
-    // "top" = 1) inserts go in first, in ascending target order so earlier targets
-    // aren't shifted by later ones; ties break by pin time. "Bottom" inserts are
-    // appended last so they always sit at the very end. Each render re-splices at
-    // the same target index, so a forced slot holds its spot as the queue churns.
+    // Legacy hard-locked spots: splice once at their old target, then convert.
     const positioned = inserts
       .filter((e) => !e.insertBottom)
       .sort((a, b) => ((a.insertPos || 1) - (b.insertPos || 1)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
@@ -2340,6 +2383,42 @@ export class QueueEngine extends EventEmitter {
       list.splice(idx, 0, e);
     }
     for (const e of bottoms) list.push(e);
+    // Flowing placements: upper ones first (by last known index), each slotted in
+    // right behind the nearest anchor still in the queue (none left → top).
+    flowing.sort((a, b) => ((a.flowIdx ?? 1e9) - (b.flowIdx ?? 1e9)) || ((a.pinnedAt || 0) - (b.pinnedAt || 0)));
+    for (const e of flowing) {
+      let at = 0;
+      for (const k of e.flowAfter) {
+        const i = list.findIndex((x) => String(x.key) === k);
+        if (i >= 0) { at = i + 1; break; }
+      }
+      list.splice(at, 0, e);
+    }
+    // Refresh every flowing slot's anchor chain from where it sits NOW, so it keeps
+    // following the queue even when the slot right above it is fulfilled or pulled
+    // out of order. Converted legacy spots become flowing here too.
+    const placed = new Set([...flowing, ...inserts].map((e) => String(e.key)));
+    if (placed.size) {
+      const byKey = new Map();
+      for (const o of this.orders.values()) {
+        if (o.status !== 'queued' || !placed.has(String(o.batchKey))) continue;
+        if (!byKey.has(o.batchKey)) byKey.set(o.batchKey, []);
+        byKey.get(o.batchKey).push(o);
+      }
+      let converted = false;
+      list.forEach((e, i) => {
+        const k = String(e.key);
+        if (!placed.has(k)) return;
+        const anchors = this._flowAnchors(list, i);
+        for (const o of byKey.get(k) || []) {
+          if (o.insertPos != null || o.insertBottom) { o.insertPos = null; o.insertBottom = false; converted = true; }
+          o.flowAfter = anchors;
+          o.flowIdx = i;
+        }
+        e.flowAfter = anchors; e.flowIdx = i; e.insertPos = null; e.insertBottom = false;
+      });
+      if (converted) { try { this._persist(); } catch {} }
+    }
     return list.map((e, i) => ({ ...e, position: i + 1 }));
   }
 
@@ -2382,12 +2461,17 @@ export class QueueEngine extends EventEmitter {
       const orders = [...this.orders.values()].filter(
         (o) => o.batchKey === String(e.key) && o.status === 'queued',
       );
+      // Flowing placement: ride behind the slots now directly above it, so it
+      // moves up as they're fulfilled instead of hard-locking to seat i+1.
+      const anchors = this._flowAnchors(newOrder, i);
       for (const o of orders) {
-        o.insertPos = i + 1;        // absolute 1-based target spot
+        o.flowAfter = anchors;
+        o.flowIdx = i;
+        o.insertPos = null;
         o.insertBottom = false;
         o.pinnedPos = null;         // retire the old top-block model
-        o.pinnedAt = now;           // tiebreak among inserts landing on the same spot
-        o.bumped = false;           // the insert spot, not a stale bump, controls placement
+        o.pinnedAt = now;           // tiebreak among slots anchored to the same spot
+        o.bumped = false;           // the placement, not a stale bump, controls position
       }
     });
     this._markTopReached();
@@ -2401,12 +2485,13 @@ export class QueueEngine extends EventEmitter {
   unpinQueueSlot(batchKey) {
     const orders = [...this.orders.values()].filter(
       (o) => o.batchKey === String(batchKey) && o.status === 'queued' &&
-        (o.pinnedPos != null || o.bumped || o.insertPos != null || o.insertBottom),
+        (o.pinnedPos != null || o.bumped || o.insertPos != null || o.insertBottom || Array.isArray(o.flowAfter)),
     );
     if (!orders.length) return false;
     for (const o of orders) {
       o.pinnedPos = null; o.pinnedAt = null; o.bumped = false;
       o.insertPos = null; o.insertBottom = false;
+      o.flowAfter = null; o.flowIdx = null;
     }
     this._markTopReached();
     this._persist();
