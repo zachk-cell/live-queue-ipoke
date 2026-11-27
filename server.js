@@ -887,7 +887,29 @@ const publicNs = io.of('/public');
 publicNs.on('connection', (socket) => socket.emit('state', publicView()));
 
 const overlayNs = io.of('/overlay');
-overlayNs.on('connection', (socket) => socket.emit('state', overlayView()));
+// Who is watching the overlays right now (OBS / TikTok Studio / a browser) — so a
+// blank overlay on stream can be diagnosed remotely: is that machine connected?
+const overlayClients = new Map(); // socket.id -> { page, ua, ip, since }
+overlayNs.on('connection', (socket) => {
+  const h = socket.handshake || {};
+  const hd = h.headers || {};
+  overlayClients.set(socket.id, {
+    page: String(hd.referer || '').replace(/^https?:\/\/[^/]+/, '') || '?',
+    ua: String(hd['user-agent'] || '').slice(0, 200),
+    ip: String(hd['x-forwarded-for'] || h.address || '').split(',')[0].trim(),
+    since: Date.now(),
+  });
+  socket.on('disconnect', () => overlayClients.delete(socket.id));
+  socket.emit('state', overlayView());
+});
+app.get('/api/overlay-clients', requireAuth, (_req, res) => {
+  const list = [...overlayClients.values()].map((c) => ({
+    ...c,
+    app: /OBS/i.test(c.ua) ? 'OBS' : /TikTok|LiveStudio/i.test(c.ua) ? 'TikTok LIVE Studio' : /Streamlabs/i.test(c.ua) ? 'Streamlabs' : 'Browser',
+    minutes: Math.round((Date.now() - c.since) / 60000),
+  }));
+  res.json({ count: list.length, clients: list.sort((a, b) => a.since - b.since) });
+});
 
 queue.on('change', () => {
   panelNs.emit('state', queue.snapshot());
