@@ -134,7 +134,27 @@
   // Explicit, never-give-up reconnection so an on-stream overlay can't freeze on
   // stale data if the feed drops. The server re-sends full state on every
   // (re)connect, and we also force a reconnect when the tab/network returns.
-  const socket = io('/overlay', {
+  // SELF-HEAL (OBS): an OBS browser source never reloads on its own. If the page
+  // loaded while the server was restarting, the live-feed script can be missing,
+  // or the feed can stay dead — leaving just an empty frame on stream. Watch for
+  // that and reload the page, but ONLY once the server answers again (reloading
+  // into an error page would strand the overlay for good).
+  const NOFEED = (typeof io !== 'function');
+  let gotState = false, lastOk = Date.now(), healing = false;
+  async function healReload(){
+    if (healing) return; healing = true;
+    try {
+      const r = await fetch('/socket.io/socket.io.js?ping=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) { location.reload(); return; }
+    } catch (e) {}
+    healing = false; // server still down — try again on the next tick
+  }
+  setInterval(() => {
+    if (!NOFEED && socket.connected && gotState) lastOk = Date.now();
+    const down = Date.now() - lastOk;
+    if (NOFEED || (!gotState && down > 15000) || down > 45000) healReload();
+  }, 5000);
+  const socket = NOFEED ? { on(){}, connect(){}, connected:false } : io('/overlay', {
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 500,
@@ -143,7 +163,7 @@
   });
   let state = { variants:[], tracker:{}, overlays:{} };
   socket.on('state', (s)=>{
-    state = s;
+    state = s; gotState = true; lastOk = Date.now();
     applySettings(s.overlays && s.overlays.vault);
     render();
   });
