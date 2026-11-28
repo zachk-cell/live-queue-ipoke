@@ -24,6 +24,14 @@
     border:1px solid var(--line);border-radius:9px;font-size:13px;font-weight:600;padding:8px 12px;transition:.12s;white-space:nowrap}
   .hdr-link:hover{filter:brightness(1.15);border-color:var(--accent)}
   .hdr-logout{margin-left:auto}
+  /* Mega Live US-buyer lock switch (controls the Shopify store blocker) */
+  .mega-btn{gap:7px;cursor:pointer}
+  .mega-btn .mg-sw{width:30px;height:17px;border-radius:999px;background:#3a3f4b;position:relative;transition:.15s;flex:none}
+  .mega-btn .mg-sw::after{content:'';position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#cfd3dc;transition:.15s}
+  .mega-btn.on{background:#fe2c55;border-color:#fe2c55;color:#fff;font-weight:800;animation:megaPulse 2s infinite}
+  .mega-btn.on .mg-sw{background:rgba(255,255,255,.35)}
+  .mega-btn.on .mg-sw::after{left:15px;background:#fff}
+  @keyframes megaPulse{0%,100%{box-shadow:0 0 0 0 rgba(254,44,85,.45)}50%{box-shadow:0 0 0 6px rgba(254,44,85,0)}}
   .stat{text-align:center;min-width:64px}
   .stat b{display:block;font-size:20px;line-height:1.1}
   .stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
@@ -544,6 +552,7 @@
   <h1><span id="dot" class="dot"></span>iPoke Live Queue <span id="liveBadge" class="livebadge">OFFLINE</span> <span id="ttStatus" class="ttbadge" style="display:none"></span> <span id="connDot" class="conn ok" title="Live feed connected">● Live feed</span></h1>
   <a href="/guide" target="_blank" class="hdr-link">📖 Guide ↗</a>
   <a id="ovBtn" href="javascript:void(0)" class="hdr-link" style="display:none" title="Scale, transparency & background for both OBS overlays — changes apply instantly." onclick="openOverlaySliders()">🎚 Overlay Sliders</a>
+  <a id="megaBtn" href="javascript:void(0)" class="hdr-link mega-btn" onclick="toggleMega()" title="Mega Live US lock — while ON, US visitors to the iPoke store see “We're LIVE on TikTok” and can't shop until you turn it off."><span class="mg-sw"></span><span id="megaTxt">Mega Live lock: OFF</span></a>
   <a href="{{ADMIN}}/logout" class="hdr-link hdr-logout">Log out</a>
   <div class="stats">
     <div class="stat"><b id="s-active">0</b><span>In queue</span></div>
@@ -862,6 +871,27 @@
     }catch(e){}
   }
   socket.on('state', (s) => { state = s; __lastState = Date.now(); setConn(true); render(); });
+  // ── Mega Live US lock (Shopify store blocker for US buyers) ──
+  let megaLock = { on:false, since:null };
+  function renderMega(){
+    const b = document.getElementById('megaBtn'); if(!b) return;
+    b.classList.toggle('on', !!megaLock.on);
+    document.getElementById('megaTxt').textContent = 'Mega Live lock: ' + (megaLock.on ? 'ON' : 'OFF');
+    const t = megaLock.since ? new Date(megaLock.since).toLocaleTimeString('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',minute:'2-digit'}) + ' PT' : '';
+    b.title = megaLock.on
+      ? `ON since ${t} — US visitors to the iPoke store are blocked (“We're LIVE on TikTok”). Click to reopen the store for US buyers.`
+      : 'OFF — the store is open to everyone. Click to block US buyers during a Mega Live (they are sent to the TikTok LIVE instead).';
+  }
+  socket.on('mega-lock', (m) => { megaLock = m || megaLock; renderMega(); });
+  async function toggleMega(){
+    const turnOn = !megaLock.on;
+    const ok = await uiConfirm(turnOn
+      ? { title:'Turn ON the Mega Live lock?', body:'US visitors to the iPoke store will see “We\u2019re LIVE on TikTok — order on TikTok only” and can\u2019t shop on the website until you turn it off. Takes effect within about 30 seconds (open pages update on their own).', confirmText:'Lock US buyers', danger:true }
+      : { title:'Turn OFF the Mega Live lock?', body:'The iPoke store reopens for US buyers. Pages showing the lock reload into the normal store within about 30 seconds.', confirmText:'Reopen the store' });
+    if(!ok) return;
+    try{ const res = await postJSON('/api/mega-lock', { on: turnOn }); if(!res.ok) throw new Error('server said '+res.status); const r = await res.json(); if(r && 'on' in r){ megaLock = r; renderMega(); } }
+    catch(e){ alert('Could not change the Mega Live lock: ' + (e.message||e)); }
+  }
   socket.on('connect', () => { setConn(true); resync(); });
   socket.on('disconnect', () => { setConn(false); });
   socket.io.on('reconnect', () => { setConn(true); resync(); });

@@ -881,7 +881,7 @@ panelNs.use((socket, next) => {
   const token = parseCookies(socket.handshake.headers.cookie).tcgauth;
   return validToken(token) ? next() : next(new Error('unauthorized'));
 });
-panelNs.on('connection', (socket) => socket.emit('state', queue.snapshot()));
+panelNs.on('connection', (socket) => { socket.emit('state', queue.snapshot()); socket.emit('mega-lock', megaLock); });
 
 const publicNs = io.of('/public');
 publicNs.on('connection', (socket) => socket.emit('state', publicView()));
@@ -902,6 +902,36 @@ overlayNs.on('connection', (socket) => {
   socket.on('disconnect', () => overlayClients.delete(socket.id));
   socket.emit('state', overlayView());
 });
+// ── Mega Live US lock ────────────────────────────────────────────────────────
+// The Shopify store's "We're LIVE on TikTok" blocker for US buyers. The admin
+// flips it here; the store's theme block polls GET /api/mega-lock (public, CORS)
+// and covers the page for US visitors while it's on. The theme's own Mega Live
+// switch still works on its own as a manual override.
+const MEGA_FILE = path.join(process.cwd(), 'data', 'mega-lock.json');
+let megaLock = { on: false, since: null };
+try { megaLock = { ...megaLock, ...JSON.parse(fs.readFileSync(MEGA_FILE, 'utf8')) }; } catch { /* first run */ }
+function saveMegaLock() {
+  try {
+    fs.mkdirSync(path.dirname(MEGA_FILE), { recursive: true });
+    fs.writeFileSync(MEGA_FILE + '.tmp', JSON.stringify(megaLock));
+    fs.renameSync(MEGA_FILE + '.tmp', MEGA_FILE);
+  } catch (e) { console.warn('[mega] save failed:', e.message); }
+}
+app.get('/api/mega-lock', (_req, res) => {
+  res.set({ 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store, max-age=0' });
+  res.json({ on: !!megaLock.on, since: megaLock.since });
+});
+app.post('/api/mega-lock', requireAuth, (req, res) => {
+  const on = !!(req.body && req.body.on);
+  if (on !== !!megaLock.on) {
+    megaLock = { on, since: Date.now() };
+    saveMegaLock();
+    console.log('[mega] US buyer lock', on ? 'ON' : 'OFF');
+  }
+  panelNs.emit('mega-lock', megaLock);
+  res.json({ ok: true, ...megaLock });
+});
+
 app.get('/api/overlay-clients', requireAuth, (_req, res) => {
   const list = [...overlayClients.values()].map((c) => ({
     ...c,
